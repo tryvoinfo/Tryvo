@@ -5,23 +5,39 @@ const supabaseUrl = 'https://wbcdiewohpngqbeqrfmb.supabase.co';
 const supabaseAnonKey = 'sb_publishable_d21wos13j9x7K-w1h8vsvw_0gPm_jlY';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+const shuffleArray = (array) => {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
 export default function ExamPortal() {
   const [stage, setStage] = useState('config'); // 'config' | 'exam' | 'result' | 'solutions' | 'swot'
   const [exams, setExams] = useState([]);
   const [subtopics, setSubtopics] = useState([]);
   
   const [selectedExamId, setSelectedExamId] = useState('');
-  const [testMode, setTestMode] = useState('Full-Length Mock');
+  const [testMode, setTestMode] = useState('Full-Length Mock'); // 'Full-Length Mock' | 'Time-Based Practice' | 'Topic-Based'
   const [mockTimingMode, setMockTimingMode] = useState('liberal'); // 'liberal' | 'strict'
   const [selectedSubtopicId, setSelectedSubtopicId] = useState('');
   const [practiceMinutes, setPracticeMinutes] = useState(15);
   const [loading, setLoading] = useState(false);
 
+  // Daily Dilemma Hero Card State
+  const [dilemmaQuestion, setDilemmaQuestion] = useState(null);
+  const [dilemmaOptions, setDilemmaOptions] = useState([]);
+  const [dilemmaSelectedIndex, setDilemmaSelectedIndex] = useState(null);
+  const [dilemmaSubmitted, setDilemmaSubmitted] = useState(false);
+  const [dilemmaTimer, setDilemmaTimer] = useState(60);
+
   // Multi-section structure state
   const [sections, setSections] = useState([]);
   const [activeSectionIndex, setActiveSectionIndex] = useState(0);
-  const [sectionQuestionsMap, setSectionQuestionsMap] = useState({}); // { section_id: [questions] }
-  const [sectionTimeLefts, setSectionTimeLefts] = useState({}); // { section_id: secondsLeft }
+  const [sectionQuestionsMap, setSectionQuestionsMap] = useState({}); 
+  const [sectionTimeLefts, setSectionTimeLefts] = useState({}); 
   const [completedSections, setCompletedSections] = useState(new Set());
 
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -34,7 +50,38 @@ export default function ExamPortal() {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
 
-  // CRITICAL HELPER: Groups all passage-based questions tightly and contiguously together
+  // Expose global navigation handler so parent App.jsx can trigger 'tests' view smoothly
+  useEffect(() => {
+    window.scrollToConfigSection = () => {
+      setStage('config');
+      const configElement = document.getElementById('session-config-section');
+      if (configElement) {
+        configElement.scrollIntoView({ behavior: 'smooth' });
+      }
+    };
+  }, []);
+
+  // Intercept browser back button during an active exam to prevent accidental exit
+  useEffect(() => {
+    if (stage !== 'exam') return;
+
+    window.history.pushState(null, '', window.location.href);
+
+    const handlePopState = (e) => {
+      const confirmLeave = window.confirm("Warning: Leaving this page will disrupt your live test session. Are you sure you want to exit?");
+      if (confirmLeave) {
+        setStage('config');
+      } else {
+        window.history.pushState(null, '', window.location.href);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [stage]);
+
   const groupPassageQuestions = (questionsArray) => {
     const passageMap = new Map();
     const standaloneQuestions = [];
@@ -58,22 +105,52 @@ export default function ExamPortal() {
     return sortedQuestions;
   };
 
+  // Load metadata and pick a random Daily Dilemma from the dedicated DB table, strictly limited to 4 options
   useEffect(() => {
-    async function loadMeta() {
-      const { data: examsData } = await supabase.from('exams').select('*');
-      const { data: subtopicsData } = await supabase.from('subtopics').select('*');
-      
-      if (examsData && examsData.length > 0) {
-        setExams(examsData);
-        setSelectedExamId(examsData[0].exam_id || examsData[0].id);
-      }
-      if (subtopicsData && subtopicsData.length > 0) {
-        setSubtopics(subtopicsData);
-        setSelectedSubtopicId(subtopicsData[0].subtopic_id || subtopicsData[0].id);
+    async function loadMetaAndDilemma() {
+      try {
+        const { data: examsData } = await supabase.from('exams').select('*');
+        const { data: subtopicsData } = await supabase.from('subtopics').select('*');
+        
+        if (examsData && examsData.length > 0) {
+          setExams(examsData);
+          setSelectedExamId(examsData[0].exam_id || examsData[0].id);
+        }
+        if (subtopicsData && subtopicsData.length > 0) {
+          setSubtopics(subtopicsData);
+          setSelectedSubtopicId(subtopicsData[0].subtopic_id || subtopicsData[0].id);
+        }
+
+        const { data: dilemmas } = await supabase.from('daily_dilemmas').select('*');
+        if (dilemmas && dilemmas.length > 0) {
+          const randomIndex = Math.floor(Math.random() * dilemmas.length);
+          const chosenDilemma = dilemmas[randomIndex];
+          const dId = chosenDilemma.dilemma_id || chosenDilemma.id;
+          setDilemmaQuestion(chosenDilemma);
+
+          const { data: optData } = await supabase
+            .from('dilemma_options')
+            .select('*')
+            .eq('dilemma_id', dId);
+
+          const shuffled = optData && optData.length > 0 ? shuffleArray(optData) : [];
+          setDilemmaOptions(shuffled.slice(0, 4));
+        }
+      } catch (err) {
+        console.error('Error loading metadata:', err);
       }
     }
-    loadMeta();
+    loadMetaAndDilemma();
   }, []);
+
+  // Dilemma 1-minute countdown tick
+  useEffect(() => {
+    if (stage !== 'config') return;
+    const ticker = setInterval(() => {
+      setDilemmaTimer((prev) => (prev > 1 ? prev - 1 : 60));
+    }, 1000);
+    return () => clearInterval(ticker);
+  }, [stage]);
 
   const startExam = async () => {
     setLoading(true);
@@ -102,12 +179,9 @@ export default function ExamPortal() {
         }
 
         let finalSectionMap = {};
-        let allQIds = [];
         let initialSectionTimes = {};
-
         const defaultSecDurationSecs = Math.round((testDurationMinutes * 60) / sectionsData.length);
 
-        // Fetch all questions and subtopics once to ensure robust distribution across modules
         const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
         const { data: allSubtopics } = await supabase.from('subtopics').select('*');
 
@@ -118,7 +192,6 @@ export default function ExamPortal() {
 
           initialSectionTimes[secId] = sec.duration_minutes ? sec.duration_minutes * 60 : defaultSecDurationSecs;
 
-          // Find subtopics belonging to this section ID or matching section name keywords
           const matchingSubIds = allSubtopics
             ?.filter(s => s.section_id === secId || s.subtopic_name?.toLowerCase().includes(sec.section_name?.toLowerCase().split(' ')[0]))
             ?.map(s => s.subtopic_id || s.id) || [];
@@ -128,44 +201,47 @@ export default function ExamPortal() {
             qData = allQuestions.filter(q => matchingSubIds.includes(q.subtopic_id));
           }
 
-          // Fallback chunking if taxonomy linkage is partial
           if ((!qData || qData.length === 0) && allQuestions && allQuestions.length > 0) {
             const chunkSize = Math.ceil(allQuestions.length / sectionsData.length);
             const startIndex = i * chunkSize;
             qData = allQuestions.slice(startIndex, startIndex + quota);
           }
 
-          // Enforce strict continuous passage grouping and module isolation
-          const groupedQData = groupPassageQuestions(qData || []);
+          const shuffledQData = shuffleArray(qData || []);
+          const groupedQData = groupPassageQuestions(shuffledQData);
           const limitedQuestions = groupedQData.slice(0, quota);
 
-          finalSectionMap[secId] = limitedQuestions;
-          allQIds.push(...limitedQuestions.map(q => q.question_id || q.id));
-        }
+          // Collect question IDs for this section to fetch options safely
+          const qIds = limitedQuestions.map(q => q.question_id || q.id);
 
-        let optData = [];
-        if (allQIds.length > 0) {
-          const { data: fetchedOpts } = await supabase
+          // Fetch options matching these specific questions
+          const { data: sectionOptions, error: optErr } = await supabase
             .from('question_options')
             .select('*')
-            .in('question_id', allQIds);
-          optData = fetchedOpts || [];
-        }
+            .in('question_id', qIds);
 
-        let processedSectionMap = {};
-        for (const secId of Object.keys(finalSectionMap)) {
-          processedSectionMap[secId] = finalSectionMap[secId].map(q => {
+          if (optErr) console.error("Error fetching options:", optErr);
+
+          console.log(`Section ${sec.section_name}: Loaded`, limitedQuestions.length, "questions and", sectionOptions?.length || 0, "options.");
+
+          finalSectionMap[secId] = limitedQuestions.map(q => {
             const qId = q.question_id || q.id;
+            
+            const rawOpts = (sectionOptions || []).filter(o => {
+              const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
+              return optQId === String(qId).trim() || optQId === String(q.id).trim();
+            });
+
             return {
               ...q,
               question_id: qId,
-              question_options: optData.filter(o => o.question_id === qId)
+              question_options: rawOpts.length > 0 ? shuffleArray(rawOpts) : []
             };
           });
         }
 
         setSections(sectionsData);
-        setSectionQuestionsMap(processedSectionMap);
+        setSectionQuestionsMap(finalSectionMap);
         setSectionTimeLefts(initialSectionTimes);
         setCompletedSections(new Set());
         setActiveSectionIndex(0);
@@ -175,37 +251,50 @@ export default function ExamPortal() {
         setQuestionTimers({});
         setReviewStatus({});
         const firstSecId = sectionsData[0]?.section_id || sectionsData[0]?.id;
-        const firstQId = processedSectionMap[firstSecId]?.[0]?.question_id;
+        const firstQId = finalSectionMap[firstSecId]?.[0]?.question_id;
         setVisitedQuestions(firstQId ? new Set([firstQId]) : new Set());
         setStage('exam');
       } 
       else {
         let loadedQuestions = [];
         if (testMode === 'Time-Based Practice') {
-          testDurationMinutes = practiceMinutes;
+          testDurationMinutes = Number(practiceMinutes);
           const { data: qData } = await supabase.from('questions').select('*, passages(*)').limit(20);
-          loadedQuestions = groupPassageQuestions(qData || []);
+          loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
         } else {
           testDurationMinutes = 15;
           const { data: qData } = await supabase.from('questions').select('*, passages(*)').eq('subtopic_id', selectedSubtopicId);
-          loadedQuestions = groupPassageQuestions(qData || []);
+          loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
         }
 
         if (loadedQuestions.length === 0) {
-          alert('No questions found.');
+          alert('No questions found for this configuration.');
           setLoading(false);
           return;
         }
 
-        const qIdKey = loadedQuestions[0].question_id !== undefined ? 'question_id' : 'id';
-        const qIds = loadedQuestions.map(q => q[qIdKey]);
-        const { data: optData } = await supabase.from('question_options').select('*').in('question_id', qIds);
+        const qIds = loadedQuestions.map(q => q.question_id || q.id);
+        const { data: sectionOptions } = await supabase
+          .from('question_options')
+          .select('*')
+          .in('question_id', qIds);
 
-        const finalQuestions = loadedQuestions.map(q => ({
-          ...q,
-          question_id: q[qIdKey],
-          question_options: optData?.filter(o => o.question_id === q[qIdKey]) || []
-        }));
+        const qIdKey = loadedQuestions[0].question_id !== undefined ? 'question_id' : 'id';
+
+        const finalQuestions = loadedQuestions.map(q => {
+          const qId = q[qIdKey];
+          
+          const rawOpts = (sectionOptions || []).filter(o => {
+            const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
+            return optQId === String(qId).trim() || optQId === String(q.id).trim();
+          });
+
+          return {
+            ...q,
+            question_id: qId,
+            question_options: rawOpts.length > 0 ? shuffleArray(rawOpts) : []
+          };
+        });
 
         setSections([{ section_id: 'PRACTICE', section_name: testMode }]);
         setSectionQuestionsMap({ PRACTICE: finalQuestions });
@@ -439,26 +528,143 @@ export default function ExamPortal() {
     const isVisited = visitedQuestions.has(qId);
 
     if (isAnswered && isMarked) return 'bg-purple-600 text-white ring-2 ring-purple-300';
-    if (isMarked) return 'bg-amber-500 text-white';
+    if (isMarked) return 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-bold';
     if (isAnswered) return 'bg-emerald-600 text-white';
     if (isVisited) return 'bg-rose-500 text-white';
-    return 'bg-slate-200 text-slate-700 hover:bg-slate-300';
+    return 'bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] hover:border-[oklch(0.94_0.21_118)]';
   };
 
+  // CONFIG STAGE
   if (stage === 'config') {
     return (
-      <div className="flex-1 bg-slate-900 text-slate-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-xl bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-xl space-y-6">
-          <div className="border-b border-slate-700 pb-4">
-            <h1 className="text-2xl font-bold tracking-tight text-teal-400">Mock Exam & Practice Portal</h1>
-            <p className="text-sm text-slate-400 mt-1">Select your target exam and practice mode to begin.</p>
+      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col justify-center px-6 lg:px-20 py-12 relative overflow-hidden font-sans">
+        
+        {/* Running Marquee Banner */}
+        <div className="w-full bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold uppercase tracking-widest py-2.5 px-4 overflow-hidden whitespace-nowrap mb-12 rounded-xl shadow-[0_0_20px_rgba(204,255,0,0.2)]">
+          <div className="inline-block animate-[marquee_25s_linear_infinite]">
+            SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now! &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now!
+          </div>
+        </div>
+
+        <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-12 items-center relative z-10">
+          
+          {/* Hero Left */}
+          <div className="lg:col-span-7 space-y-8">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-xs tracking-[0.15em] text-[oklch(0.68_0.04_265)] uppercase">
+              <span className="w-2 h-2 rounded-full bg-[oklch(0.94_0.21_118)] animate-pulse"></span>
+             The Daily Dilemma: 1 minute, 1 moral choice, endless perspectives
+            </div>
+
+            <div className="space-y-2">
+              <h1 className="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight font-['Archivo_Black'] leading-[1.05]">
+                Beat the clock.<br />
+                <span className="text-[oklch(0.94_0.21_118)] drop-shadow-[0_0_30px_rgba(204,255,0,0.3)]">Own the rank.</span>
+              </h1>
+              <p className="text-sm sm:text-base text-[oklch(0.68_0.04_265)] font-sans max-w-xl leading-relaxed pt-2">
+                Real timed mock tests, live percentile drops, and streaks that punish you for quitting. Built for the JEE, NEET, UPSC, SSC and CAT grinders who play to win.
+              </p>
+            </div>
+
+            {/* Exam Tag Row */}
+            <div className="flex flex-wrap gap-2 pt-2">
+              {['JEE', 'NEET', 'UPSC', 'SSC', 'CAT'].map((tag, i) => (
+                <span key={i} className="px-3 py-1 rounded-lg bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-[11px] uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)]">
+                  {tag}
+                </span>
+              ))}
+            </div>
           </div>
 
-          <div className="space-y-4">
+          {/* Hero Right: Live Daily Dilemma Preview Card */}
+          <div className="lg:col-span-5">
+            <div className="bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-6 sm:p-8 shadow-2xl relative space-y-6 group hover:border-[oklch(0.94_0.21_118)]/40 transition">
+              
+              <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                <span className="font-mono text-xs uppercase tracking-[0.1em] text-[oklch(0.94_0.21_118)] font-bold">The Daily Dilemma: Challenge your choice</span>
+                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[oklch(0.16_0.03_265)] border border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)] font-mono text-xs font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[oklch(0.94_0.21_118)] animate-ping"></span>
+                  0:{dilemmaTimer < 10 ? `0${dilemmaTimer}` : dilemmaTimer}
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-sm sm:text-base font-semibold text-[oklch(0.96_0.012_265)] min-h-[48px]">
+                  {dilemmaQuestion ? dilemmaQuestion.question_text : 'Loading dilemma from separate table...'}
+                </p>
+
+                <div className="space-y-2.5 font-mono text-xs">
+                  {dilemmaOptions.length > 0 ? (
+                    dilemmaOptions.map((opt, oIdx) => {
+                      const optId = opt.option_id || opt.id;
+                      const isSelected = dilemmaSelectedIndex === oIdx;
+                      const isCorrect = opt.is_correct;
+
+                      let borderStyle = 'border-white/5 bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)]';
+                      if (dilemmaSubmitted) {
+                        if (isCorrect) {
+                          borderStyle = 'border-emerald-500 bg-emerald-500/20 text-emerald-300 font-bold';
+                        } else if (isSelected && !isCorrect) {
+                          borderStyle = 'border-rose-500 bg-rose-500/20 text-rose-300';
+                        }
+                      } else if (isSelected) {
+                        borderStyle = 'border-[oklch(0.94_0.21_118)] bg-[oklch(0.94_0.21_118)]/10 text-[oklch(0.96_0.012_265)] shadow-[0_0_15px_rgba(204,255,0,0.15)]';
+                      }
+
+                      return (
+                        <div
+                          key={optId}
+                          onClick={() => !dilemmaSubmitted && setDilemmaSelectedIndex(oIdx)}
+                          className={`p-3 rounded-xl border transition cursor-pointer flex justify-between items-center ${borderStyle}`}
+                        >
+                          <span>{String.fromCharCode(65 + oIdx)} — {opt.option_text}</span>
+                          {dilemmaSubmitted && isCorrect && <span className="text-emerald-400 font-bold">✓ CORRECT</span>}
+                          {!dilemmaSubmitted && isSelected && <span className="text-[oklch(0.94_0.21_118)] font-bold">SELECTED</span>}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-3 text-center text-slate-500">Fetching options...</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-between">
+                <button
+                  onClick={() => setDilemmaSubmitted(true)}
+                  disabled={dilemmaSelectedIndex === null || dilemmaSubmitted}
+                  className="px-4 py-2 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-wider font-extrabold rounded-xl shadow transition disabled:opacity-40 cursor-pointer"
+                >
+                  Submit Answer
+                </button>
+                {dilemmaSubmitted && (
+                  <button
+                    onClick={() => {
+                      setDilemmaSubmitted(false);
+                      setDilemmaSelectedIndex(null);
+                    }}
+                    className="font-mono text-[10px] uppercase tracking-wider text-[oklch(0.68_0.04_265)] hover:text-white underline cursor-pointer"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        {/* Configuration Selector Modal/Box inline with Conditional Options */}
+        <div id="session-config-section" className="max-w-3xl mx-auto w-full mt-16 bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6 scroll-mt-24">
+          <div className="border-b border-white/10 pb-4">
+            <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold mb-1">Session Configuration</h3>
+            <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">Configure Your Battleground</h2>
+          </div>
+
+          <div className="space-y-5 font-mono text-xs">
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Select Target Exam</label>
+              <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Exam Blueprint</label>
               <select
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+                className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
                 value={selectedExamId}
                 onChange={(e) => setSelectedExamId(e.target.value)}
               >
@@ -469,27 +675,27 @@ export default function ExamPortal() {
                     </option>
                   ))
                 ) : (
-                  <option value="">No exams found in database</option>
+                  <option value="">No exam blueprints found</option>
                 )}
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Test Mode</label>
-              <div className="grid grid-cols-3 gap-2">
+              <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Execution Mode</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 {[
-                  { id: 'Full-Length Mock', label: '1. Full-Length Mock' },
-                  { id: 'Time-Based Practice', label: '2. Time-Based Practice' },
-                  { id: 'Topic-Based', label: '3. Topic-Based Test' }
+                  { id: 'Full-Length Mock', label: 'Full Mock' },
+                  { id: 'Time-Based Practice', label: 'Timed Sprint' },
+                  { id: 'Topic-Based', label: 'Topic Drill' }
                 ].map((mode) => (
                   <button
                     key={mode.id}
                     type="button"
                     onClick={() => setTestMode(mode.id)}
-                    className={`py-2 px-1 text-xs font-medium rounded-lg border transition cursor-pointer ${
+                    className={`p-3.5 rounded-xl border text-center transition cursor-pointer uppercase font-bold tracking-wider ${
                       testMode === mode.id
-                        ? 'bg-teal-600/20 border-teal-500 text-teal-300'
-                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                        ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
+                        : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
                     }`}
                   >
                     {mode.label}
@@ -498,64 +704,79 @@ export default function ExamPortal() {
               </div>
             </div>
 
+            {/* CONDITIONAL SETTINGS BASED ON EXECUTION MODE */}
             {testMode === 'Full-Length Mock' && (
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Sectional Timing Strategy</label>
-                <div className="grid grid-cols-2 gap-3">
+                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Timer Protocol</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => setMockTimingMode('strict')}
-                    className={`p-3 text-left rounded-lg border transition cursor-pointer ${
+                    className={`p-4 rounded-xl border text-left transition cursor-pointer ${
                       mockTimingMode === 'strict'
-                        ? 'bg-teal-600/20 border-teal-500 text-teal-300 ring-1 ring-teal-500'
-                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                        ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
+                        : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
                     }`}
                   >
-                    <span className="font-bold block text-xs uppercase">a. Strict Sectional Timer</span>
-                    <span className="text-[11px] opacity-85 block mt-0.5">Fixed time per section (Locked navigation)</span>
+                    <span className="block uppercase font-bold text-xs tracking-wider">Strict Timer</span>
+                    <span className="text-[11px] opacity-75 font-sans mt-0.5 block">Locked module pacing</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setMockTimingMode('liberal')}
-                    className={`p-3 text-left rounded-lg border transition cursor-pointer ${
+                    className={`p-4 rounded-xl border text-left transition cursor-pointer ${
                       mockTimingMode === 'liberal'
-                        ? 'bg-teal-600/20 border-teal-500 text-teal-300 ring-1 ring-teal-500'
-                        : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-600'
+                        ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
+                        : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
                     }`}
                   >
-                    <span className="font-bold block text-xs uppercase">b. Liberal Sectional Timer</span>
-                    <span className="text-[11px] opacity-85 block mt-0.5">Flexible navigation across all sections</span>
+                    <span className="block uppercase font-bold text-xs tracking-wider">Liberal Timer</span>
+                    <span className="text-[11px] opacity-75 font-sans mt-0.5 block">Flexible navigation</span>
                   </button>
+                </div>
+              </div>
+            )}
+
+            {testMode === 'Time-Based Practice' && (
+              <div>
+                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Sprint Duration</label>
+                <div className="grid grid-cols-4 gap-2.5">
+                  {[10, 15, 30, 45].map((mins) => (
+                    <button
+                      key={mins}
+                      type="button"
+                      onClick={() => setPracticeMinutes(mins)}
+                      className={`p-3 rounded-xl border text-center transition cursor-pointer font-bold ${
+                        Number(practiceMinutes) === mins
+                          ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
+                          : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
+                      }`}
+                    >
+                      {mins} MINS
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
 
             {testMode === 'Topic-Based' && (
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Select Subtopic Taxonomy</label>
+                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Topic / Subtopic</label>
                 <select
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+                  className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
                   value={selectedSubtopicId}
                   onChange={(e) => setSelectedSubtopicId(e.target.value)}
                 >
-                  {subtopics.map((sub) => (
-                    <option key={sub.subtopic_id || sub.id} value={sub.subtopic_id || sub.id}>{sub.subtopic_name || sub.name}</option>
-                  ))}
+                  {subtopics.length > 0 ? (
+                    subtopics.map((sub) => (
+                      <option key={sub.subtopic_id || sub.id} value={sub.subtopic_id || sub.id}>
+                        {sub.subtopic_name || sub.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No subtopics available in database</option>
+                  )}
                 </select>
-              </div>
-            )}
-
-            {testMode === 'Time-Based Practice' && (
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1">Practice Duration (Minutes)</label>
-                <input
-                  type="number"
-                  min="5"
-                  max="60"
-                  value={practiceMinutes}
-                  onChange={(e) => setPracticeMinutes(Number(e.target.value))}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none"
-                />
               </div>
             )}
           </div>
@@ -563,15 +784,17 @@ export default function ExamPortal() {
           <button
             onClick={startExam}
             disabled={loading}
-            className="w-full py-3 bg-teal-600 hover:bg-teal-500 text-white font-semibold rounded-lg shadow transition disabled:opacity-50 cursor-pointer"
+            className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer"
           >
-            {loading ? 'Preparing Session...' : 'Start Assessment'}
+            {loading ? 'BUILDING QUESTION BANK...' : 'INITIALIZE MOCK SESSION →'}
           </button>
         </div>
+
       </div>
     );
   }
 
+  // EXAM STAGE HUD
   if (stage === 'exam') {
     const currentQList = getCurrentActiveQuestions();
     const currentQ = currentQList[currentIndex];
@@ -580,43 +803,44 @@ export default function ExamPortal() {
     const activeSecTimeLeft = sectionTimeLefts[activeSecId];
 
     return (
-      <div className="flex flex-col flex-1 bg-slate-100 text-slate-800 font-sans select-none relative min-h-screen">
-        <header className="bg-slate-800 text-white px-3 sm:px-6 py-2.5 flex flex-wrap items-center justify-between border-b border-slate-700 gap-2">
+      <div className="flex flex-col flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] font-sans select-none relative min-h-screen">
+        <header className="bg-[oklch(0.23_0.045_265)] text-white px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between border-b border-white/10 gap-4">
           <div>
-            <span className="text-[10px] sm:text-xs uppercase tracking-wider text-teal-400 font-bold block">Assessment Environment</span>
-            <h2 className="font-semibold text-xs sm:text-base">{testMode} Session</h2>
+            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold block">Live Execution HUD</span>
+            <h2 className="font-bold text-xs sm:text-sm font-mono tracking-wider">{testMode.toUpperCase()}</h2>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-6">
+          <div className="flex items-center gap-4 sm:gap-8">
             {mockTimingMode === 'strict' && activeSecTimeLeft !== undefined && (
-              <div className="text-right border-r border-slate-700 pr-3 sm:pr-6">
-                <span className="text-[10px] sm:text-[11px] text-teal-300 block font-bold uppercase tracking-wider">Section Time</span>
-                <span className="text-sm sm:text-base font-mono font-bold text-teal-300">{formatTime(activeSecTimeLeft)}</span>
+              <div className="text-right border-r border-white/10 pr-4 sm:pr-8">
+                <span className="font-mono text-[10px] text-[oklch(0.94_0.21_118)] block uppercase tracking-widest font-bold">Module Clock</span>
+                <span className="text-sm sm:text-base font-mono font-bold text-[oklch(0.94_0.21_118)]">{formatTime(activeSecTimeLeft)}</span>
               </div>
             )}
             <div className="text-right">
-              <span className="text-[10px] sm:text-xs text-slate-400 block">Total Time</span>
+              <span className="font-mono text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest">Total Countdown</span>
               <span className="text-sm sm:text-lg font-mono font-bold text-amber-400">{formatTime(timeLeft)}</span>
             </div>
             
             <button
               onClick={() => setIsPaletteOpen(!isPaletteOpen)}
-              className="lg:hidden bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-2 rounded shadow transition"
+              className="lg:hidden bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold px-3 py-2 rounded-xl"
             >
-              {isPaletteOpen ? 'Close Grid' : 'Question Grid'}
+              {isPaletteOpen ? 'Close Grid' : 'Grid'}
             </button>
 
             <button
               onClick={() => setShowSubmitConfirm(true)}
-              className="bg-rose-600 hover:bg-rose-700 text-white text-[11px] sm:text-xs font-bold uppercase tracking-wider px-3 sm:px-4 py-2 rounded shadow transition cursor-pointer"
+              className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold uppercase tracking-[0.15em] px-4 py-2.5 rounded-xl shadow-lg transition cursor-pointer"
             >
-              Submit
+              Submit Test
             </button>
           </div>
         </header>
 
-        <div className="bg-slate-700 px-3 sm:px-6 py-2 flex items-center gap-2 border-b border-slate-600 overflow-x-auto">
-          <span className="text-[11px] sm:text-xs text-slate-300 uppercase font-bold tracking-wider mr-2 shrink-0">Modules:</span>
+        {/* Module Switcher Row */}
+        <div className="bg-[oklch(0.23_0.045_265)]/50 px-4 sm:px-8 py-2.5 flex items-center gap-2 border-b border-white/10 overflow-x-auto font-mono text-xs">
+          <span className="text-[oklch(0.68_0.04_265)] uppercase font-bold tracking-[0.15em] mr-2 shrink-0">Modules:</span>
           {sections.map((sec, idx) => {
             const secId = sec.section_id || sec.id;
             const isCurrent = activeSectionIndex === idx;
@@ -624,88 +848,86 @@ export default function ExamPortal() {
               <button
                 key={secId}
                 onClick={() => handleSelectSection(idx)}
-                className={`px-3 py-1.5 rounded-lg text-[11px] sm:text-xs font-semibold tracking-wide transition shrink-0 ${
+                className={`px-4 py-2 rounded-xl font-bold tracking-wider transition shrink-0 cursor-pointer ${
                   isCurrent
-                    ? 'bg-teal-600 text-white shadow'
+                    ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
                     : mockTimingMode === 'strict'
-                    ? 'bg-slate-800/60 text-slate-500 cursor-not-allowed border border-slate-700'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-600 cursor-pointer'
+                    ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] opacity-50 cursor-not-allowed border border-white/5'
+                    : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] hover:text-[oklch(0.96_0.012_265)] border border-white/5'
                 }`}
               >
-                {sec.section_name} ({sectionQuestionsMap[secId]?.length || 0}) {mockTimingMode === 'strict' && !isCurrent && '🔒'}
+                {sec.section_name.toUpperCase()} ({sectionQuestionsMap[secId]?.length || 0}) {mockTimingMode === 'strict' && !isCurrent && '🔒'}
               </button>
             );
           })}
         </div>
 
         <div className="flex flex-1 relative overflow-hidden">
-          <main className="flex-1 flex flex-col bg-white border-r border-slate-200 overflow-hidden w-full">
-            <div className="px-4 sm:px-6 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <span className="font-bold text-xs sm:text-sm text-slate-700">
-                {sections[activeSectionIndex]?.section_name} &gt; Q.No. {currentIndex + 1}
+          <main className="flex-1 flex flex-col bg-[oklch(0.16_0.03_265)] border-r border-white/10 overflow-hidden w-full">
+            <div className="px-6 py-3.5 bg-[oklch(0.23_0.045_265)]/30 border-b border-white/10 flex items-center justify-between font-mono text-xs">
+              <span className="font-bold text-[oklch(0.96_0.012_265)] tracking-wider">
+                {sections[activeSectionIndex]?.section_name.toUpperCase()} &gt; Q.{currentIndex + 1}
               </span>
-              <span className="text-[11px] sm:text-xs text-slate-500 font-medium">Difficulty: {currentQ?.difficulty_level || 'Moderate'}</span>
+              <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Difficulty: {currentQ?.difficulty_level || 'Moderate'}</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-6 sm:p-10 space-y-6">
               {(currentQ?.passages?.passage_text || currentQ?.passage_text) && (
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm text-slate-700">
-                  <h4 className="font-bold text-slate-900 mb-1 border-b pb-1">Reading Passage / Context</h4>
-                  <p className="leading-relaxed whitespace-pre-line">
+                <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-2xl p-6 text-sm text-[oklch(0.96_0.012_265)] space-y-2">
+                  <h4 className="font-mono text-xs uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] font-bold border-b border-white/10 pb-2">Reading Context / Passage</h4>
+                  <p className="leading-relaxed whitespace-pre-line font-sans">
                     {currentQ?.passages?.passage_text || currentQ?.passage_text}
                   </p>
                 </div>
               )}
 
               {currentQ?.image_url && (
-                <div className="my-3 flex justify-center bg-slate-50 p-3 rounded-lg border border-slate-200">
-                  <img 
-                    src={currentQ.image_url} 
-                    alt="Question Diagram or Graph" 
-                    className="max-h-48 sm:max-h-64 object-contain rounded"
-                  />
+                <div className="flex justify-center bg-[oklch(0.23_0.045_265)] p-4 rounded-2xl border border-white/10">
+                  <img src={currentQ.image_url} alt="Question Graphic" className="max-h-64 object-contain rounded" />
                 </div>
               )}
 
-              <div className="text-sm sm:text-base font-medium text-slate-900 leading-relaxed">
+              <div className="text-base sm:text-lg font-medium text-[oklch(0.96_0.012_265)] leading-relaxed font-sans">
                 {currentQ?.question_text}
               </div>
 
-              <div className="space-y-2.5 pt-2">
+              <div className="space-y-3 pt-2">
                 {currentQ?.question_options?.map((opt, oIndex) => {
                   const optId = opt.option_id || opt.id;
                   const isChecked = userAnswers[currentQ.question_id] === optId;
                   return (
-                    <label
+                    <div
                       key={optId}
                       onClick={() => handleOptionSelect(optId)}
-                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition ${
+                      className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
                         isChecked
-                          ? 'bg-teal-50 border-teal-500 text-teal-900 ring-1 ring-teal-500'
-                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                          ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.96_0.012_265)] shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]'
+                          : 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-[oklch(0.96_0.012_265)]'
                       }`}
                     >
-                      <span className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 flex items-center justify-center rounded-full text-xs font-semibold border border-slate-300 bg-white">
+                      <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
+                        isChecked ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : 'bg-[oklch(0.16_0.03_265)] border-white/20 text-[oklch(0.96_0.012_265)]'
+                      }`}>
                         {String.fromCharCode(65 + oIndex)}
                       </span>
-                      <span className="text-xs sm:text-sm font-medium">{opt.option_text}</span>
-                    </label>
+                      <span className="text-sm font-medium font-sans">{opt.option_text}</span>
+                    </div>
                   );
                 })}
               </div>
             </div>
 
-            <div className="px-4 sm:px-6 py-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex gap-2">
+            <div className="px-6 py-4 bg-[oklch(0.23_0.045_265)]/40 border-t border-white/10 flex flex-wrap items-center justify-between gap-4 font-mono">
+              <div className="flex gap-3">
                 <button
                   onClick={handleMarkForReviewAndNext}
-                  className="px-3 sm:px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white text-[11px] sm:text-xs font-semibold rounded shadow transition cursor-pointer"
+                  className="px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold uppercase tracking-wider rounded-xl border border-amber-500/30 transition cursor-pointer"
                 >
                   Mark & Next
                 </button>
                 <button
                   onClick={handleClearResponse}
-                  className="px-3 sm:px-4 py-2 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-[11px] sm:text-xs font-semibold rounded transition cursor-pointer"
+                  className="px-4 py-2.5 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.68_0.04_265)] text-xs font-bold uppercase tracking-wider rounded-xl border border-white/10 transition cursor-pointer"
                 >
                   Clear
                 </button>
@@ -713,53 +935,52 @@ export default function ExamPortal() {
 
               <button
                 onClick={handleSaveAndNext}
-                className="px-5 sm:px-6 py-2 bg-teal-700 hover:bg-teal-800 text-white text-[11px] sm:text-xs font-semibold rounded shadow transition cursor-pointer"
+                className="px-6 py-2.5 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] text-xs font-extrabold uppercase tracking-[0.15em] rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.2)] transition cursor-pointer"
               >
-                Save & Next
+                Save & Next →
               </button>
             </div>
           </main>
 
-          <aside className={`absolute lg:relative top-0 right-0 h-full w-full sm:w-80 bg-slate-50 flex flex-col border-l border-slate-200 z-40 transition-transform duration-300 ${isPaletteOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
-            <div className="p-4 border-b border-slate-200 bg-white flex justify-between items-center lg:block">
-              <h5 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 lg:mb-2.5">Palette Summary</h5>
-              <button onClick={() => setIsPaletteOpen(false)} className="lg:hidden text-slate-500 font-bold text-sm px-2 py-1 bg-slate-100 rounded">✕ Close</button>
+          {/* Question Grid Sidebar */}
+          <aside className={`absolute lg:relative top-0 right-0 h-full w-full sm:w-80 bg-[oklch(0.23_0.045_265)] flex flex-col border-l border-white/10 z-40 transition-transform duration-300 ${isPaletteOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
+            <div className="p-5 border-b border-white/10 bg-[oklch(0.16_0.03_265)]/50">
+              <div className="flex justify-between items-center mb-3">
+                <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)]">HUD Palette Summary</h5>
+                <button onClick={() => setIsPaletteOpen(false)} className="lg:hidden text-xs text-white font-mono bg-white/10 px-2 py-1 rounded">✕</button>
+              </div>
               
-              <div className="grid grid-cols-2 gap-2 text-xs mt-2">
-                <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 px-2 py-1 rounded text-emerald-900">
+              <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
+                <div className="flex items-center justify-between bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1.5 rounded-xl text-emerald-300">
                   <span>Answered</span>
-                  <span className="font-bold bg-emerald-600 text-white px-1.5 py-0.5 rounded-full text-[10px]">{paletteCounts.answered}</span>
+                  <span className="font-bold">{paletteCounts.answered}</span>
                 </div>
-                <div className="flex items-center justify-between bg-rose-50 border border-rose-200 px-2 py-1 rounded text-rose-900">
-                  <span>Not Answered</span>
-                  <span className="font-bold bg-rose-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">{paletteCounts.notAnswered}</span>
+                <div className="flex items-center justify-between bg-rose-500/10 border border-rose-500/20 px-2.5 py-1.5 rounded-xl text-rose-300">
+                  <span>Unanswered</span>
+                  <span className="font-bold">{paletteCounts.notAnswered}</span>
                 </div>
-                <div className="flex items-center justify-between bg-amber-50 border border-amber-200 px-2 py-1 rounded text-amber-900">
+                <div className="flex items-center justify-between bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/20 px-2.5 py-1.5 rounded-xl text-[oklch(0.94_0.21_118)]">
                   <span>Marked</span>
-                  <span className="font-bold bg-amber-500 text-white px-1.5 py-0.5 rounded-full text-[10px]">{paletteCounts.marked}</span>
+                  <span className="font-bold">{paletteCounts.marked}</span>
                 </div>
-                <div className="flex items-center justify-between bg-purple-50 border border-purple-200 px-2 py-1 rounded text-purple-900">
-                  <span>Ans & Marked</span>
-                  <span className="font-bold bg-purple-600 text-white px-1.5 py-0.5 rounded-full text-[10px]">{paletteCounts.answeredAndMarked}</span>
-                </div>
-                <div className="col-span-2 flex items-center justify-between bg-slate-100 border border-slate-200 px-2 py-1 rounded text-slate-700">
-                  <span>Not Visited</span>
-                  <span className="font-bold bg-slate-400 text-white px-1.5 py-0.5 rounded-full text-[10px]">{paletteCounts.notVisited}</span>
+                <div className="flex items-center justify-between bg-white/5 border border-white/10 px-2.5 py-1.5 rounded-xl text-[oklch(0.68_0.04_265)]">
+                  <span>Unvisited</span>
+                  <span className="font-bold">{paletteCounts.notVisited}</span>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 border-b border-slate-200 flex-1 overflow-y-auto bg-slate-50">
-              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
-                {sections[activeSectionIndex]?.section_name} Grid
+            <div className="p-5 flex-1 overflow-y-auto">
+              <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-3">
+                Question Navigator
               </h5>
-              <div className="grid grid-cols-5 gap-2 pb-12 lg:pb-0">
+              <div className="grid grid-cols-5 gap-2">
                 {currentQList.map((q, idx) => (
                   <button
                     key={q.question_id}
                     onClick={() => handleSelectQuestion(idx)}
-                    className={`h-10 rounded font-bold text-xs shadow-sm transition cursor-pointer ${getQuestionPaletteStyle(q.question_id)} ${
-                      currentIndex === idx ? 'ring-2 ring-slate-900 ring-offset-1' : ''
+                    className={`h-11 rounded-xl font-mono font-bold text-xs shadow transition cursor-pointer ${getQuestionPaletteStyle(q.question_id)} ${
+                      currentIndex === idx ? 'ring-2 ring-[oklch(0.94_0.21_118)] ring-offset-2 ring-offset-[oklch(0.23_0.045_265)]' : ''
                     }`}
                   >
                     {idx + 1}
@@ -770,71 +991,30 @@ export default function ExamPortal() {
           </aside>
         </div>
 
+        {/* Submit Confirmation Modal */}
         {showSubmitConfirm && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-slate-800 border border-slate-700 rounded-2xl p-6 max-w-md w-full space-y-6 shadow-2xl text-slate-100">
-              <div className="text-center space-y-1">
-                <h3 className="text-xl font-bold text-teal-400">Ready to Submit Exam?</h3>
-                <p className="text-xs text-slate-400">Please review your final question status summary below.</p>
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+            <div className="bg-[oklch(0.23_0.045_265)] border border-white/15 rounded-3xl p-8 max-w-md w-full space-y-6 shadow-2xl text-[oklch(0.96_0.012_265)] font-mono">
+              <div className="text-center space-y-2">
+                <h3 className="text-xl font-black font-['Archivo_Black'] tracking-tight text-[oklch(0.94_0.21_118)]">CONFIRM SUBMISSION</h3>
+                <p className="text-xs text-[oklch(0.68_0.04_265)] uppercase tracking-wider">Final lock-in of your answers.</p>
               </div>
 
-              <div className="bg-slate-900 rounded-xl p-4 border border-slate-700 space-y-3">
-                {(() => {
-                  let totalQ = 0;
-                  let answered = 0;
-                  let marked = 0;
-                  let unattempted = 0;
-
-                  Object.values(sectionQuestionsMap).forEach((qList) => {
-                    totalQ += qList.length;
-                    qList.forEach((q) => {
-                      const qId = q.question_id;
-                      const isAns = !!userAnswers[qId];
-                      const isMark = !!reviewStatus[qId];
-                      if (isAns) answered++;
-                      if (isMark) marked++;
-                      if (!isAns) unattempted++;
-                    });
-                  });
-
-                  return (
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="bg-slate-800 p-2.5 rounded border border-slate-700 flex justify-between items-center">
-                        <span className="text-slate-400">Total Questions:</span>
-                        <span className="font-bold text-slate-200">{totalQ}</span>
-                      </div>
-                      <div className="bg-emerald-950/40 p-2.5 rounded border border-emerald-900/60 flex justify-between items-center">
-                        <span className="text-emerald-300">Answered:</span>
-                        <span className="font-bold text-emerald-400">{answered}</span>
-                      </div>
-                      <div className="bg-amber-950/40 p-2.5 rounded border border-amber-900/60 flex justify-between items-center">
-                        <span className="text-amber-300">Marked for Review:</span>
-                        <span className="font-bold text-amber-400">{marked}</span>
-                      </div>
-                      <div className="bg-rose-950/40 p-2.5 rounded border border-rose-900/60 flex justify-between items-center">
-                        <span className="text-rose-300">Unattempted:</span>
-                        <span className="font-bold text-rose-400">{unattempted}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              <div className="flex gap-3">
+              <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setShowSubmitConfirm(false)}
-                  className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 text-xs font-semibold rounded-lg transition cursor-pointer"
+                  className="flex-1 py-3 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-xs font-bold uppercase tracking-widest rounded-xl border border-white/10 transition cursor-pointer"
                 >
-                  Resume Test
+                  Resume
                 </button>
                 <button
                   onClick={() => {
                     setShowSubmitConfirm(false);
                     handleSubmitTest();
                   }}
-                  className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-xs font-bold uppercase tracking-wider rounded-lg shadow transition cursor-pointer"
+                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-500 text-xs font-bold uppercase tracking-widest rounded-xl shadow-lg transition cursor-pointer"
                 >
-                  Confirm & Submit
+                  Lock In
                 </button>
               </div>
             </div>
@@ -844,6 +1024,7 @@ export default function ExamPortal() {
     );
   }
 
+  // RESULTS STAGE
   if (stage === 'result' && attemptResult) {
     let sectionStats = sections.map((sec) => {
       const secId = sec.section_id || sec.id;
@@ -882,67 +1063,71 @@ export default function ExamPortal() {
     });
 
     return (
-      <div className="flex-1 bg-slate-900 text-slate-100 p-4 sm:p-6 flex flex-col items-center overflow-y-auto">
-        <div className="w-full max-w-3xl space-y-6">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-6 shadow-xl text-center space-y-4">
-            <h2 className="text-xl sm:text-2xl font-bold text-teal-400">Assessment Performance Dashboard</h2>
-            <p className="text-xs text-slate-400">Detailed breakdown of your accuracy, speed, and identified weak areas.</p>
+      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center overflow-y-auto font-sans">
+        <div className="w-full max-w-4xl space-y-8">
+          
+          <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl text-center space-y-6 backdrop-blur-xl">
+            <div className="inline-flex px-4 py-1 rounded-full bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/30 font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold">
+              Mission Debrief
+            </div>
+            <h2 className="text-3xl font-black font-['Archivo_Black'] tracking-tight">ASSESSMENT PERFORMANCE HUD</h2>
 
-            <div className="bg-slate-900 rounded-xl p-3 sm:p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 border border-slate-700 text-left">
-              <div>
-                <span className="text-[10px] sm:text-[11px] text-slate-400 block uppercase font-bold">Total Questions</span>
-                <span className="text-base sm:text-lg font-bold text-slate-200">{attemptResult.totalQuestions}</span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 font-mono">
+              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
+                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Total Items</span>
+                <span className="text-xl font-black text-white font-['Archivo_Black']">{attemptResult.totalQuestions}</span>
               </div>
-              <div>
-                <span className="text-[10px] sm:text-[11px] text-slate-400 block uppercase font-bold">Attempted</span>
-                <span className="text-base sm:text-lg font-bold text-amber-400">{attemptResult.attempted}</span>
+              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
+                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Attempted</span>
+                <span className="text-xl font-black text-amber-400 font-['Archivo_Black']">{attemptResult.attempted}</span>
               </div>
-              <div>
-                <span className="text-[10px] sm:text-[11px] text-slate-400 block uppercase font-bold">Overall Accuracy</span>
-                <span className="text-base sm:text-lg font-bold text-teal-300">{attemptResult.accuracy}%</span>
+              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
+                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Accuracy</span>
+                <span className="text-xl font-black text-[oklch(0.94_0.21_118)] font-['Archivo_Black']">{attemptResult.accuracy}%</span>
               </div>
-              <div>
-                <span className="text-[10px] sm:text-[11px] text-slate-400 block uppercase font-bold">Final Score</span>
-                <span className="text-base sm:text-lg font-bold text-emerald-400">{attemptResult.score} Marks</span>
+              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
+                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Final Score</span>
+                <span className="text-xl font-black text-emerald-400 font-['Archivo_Black']">{attemptResult.score}</span>
               </div>
             </div>
           </div>
 
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-4 sm:p-6 shadow-xl space-y-5">
-            <h3 className="text-sm sm:text-base font-bold text-teal-400 border-b border-slate-700 pb-3">📊 Section-wise Accuracy & Weak Areas</h3>
+          {/* Module breakdown */}
+          <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl space-y-6">
+            <h3 className="font-mono text-xs font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-[0.2em] border-b border-white/10 pb-3">Module-wise Precision & Weak Zones</h3>
 
-            <div className="space-y-4">
+            <div className="space-y-4 font-mono">
               {sectionStats.map((stat, idx) => {
                 const isWeak = stat.accuracy < 50 && stat.total > 0;
                 return (
-                  <div key={idx} className="bg-slate-900/80 border border-slate-700 rounded-xl p-4 space-y-3">
+                  <div key={idx} className="bg-[oklch(0.16_0.03_265)] border border-white/5 rounded-2xl p-5 space-y-3">
                     <div className="flex flex-wrap justify-between items-center gap-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-bold text-sm text-slate-200">{stat.name}</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold text-sm text-[oklch(0.96_0.012_265)]">{stat.name.toUpperCase()}</span>
                         {isWeak ? (
-                          <span className="bg-rose-950/80 border border-rose-700 text-rose-300 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                            ⚠️ Weak Area - Focus Here
+                          <span className="bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest">
+                            ⚠️ WEAK ZONE
                           </span>
                         ) : (
-                          <span className="bg-emerald-950/80 border border-emerald-700 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-                            ✅ Strong Zone
+                          <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest">
+                            ✅ LOCKED IN
                           </span>
                         )}
                       </div>
-                      <span className="text-xs font-mono font-bold text-teal-300">{stat.accuracy}% Accuracy</span>
+                      <span className="text-xs font-bold text-[oklch(0.94_0.21_118)]">{stat.accuracy}% PRECISION</span>
                     </div>
 
-                    <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex border border-slate-700">
-                      <div style={{ width: `${stat.total ? (stat.correct / stat.total) * 100 : 0}%` }} className="bg-emerald-500 transition-all duration-500" title="Correct"></div>
-                      <div style={{ width: `${stat.total ? (stat.incorrect / stat.total) * 100 : 0}%` }} className="bg-rose-500 transition-all duration-500" title="Incorrect"></div>
-                      <div style={{ width: `${stat.total ? (stat.unattempted / stat.total) * 100 : 0}%` }} className="bg-slate-600 transition-all duration-500" title="Unattempted"></div>
+                    <div className="w-full bg-[oklch(0.23_0.045_265)] h-2.5 rounded-full overflow-hidden flex border border-white/10">
+                      <div style={{ width: `${stat.total ? (stat.correct / stat.total) * 100 : 0}%` }} className="bg-emerald-500"></div>
+                      <div style={{ width: `${stat.total ? (stat.incorrect / stat.total) * 100 : 0}%` }} className="bg-rose-500"></div>
+                      <div style={{ width: `${stat.total ? (stat.unattempted / stat.total) * 100 : 0}%` }} className="bg-white/20"></div>
                     </div>
 
-                    <div className="flex flex-wrap justify-between text-[11px] text-slate-400 pt-1 gap-1">
-                      <span className="text-emerald-400 font-semibold">Correct: {stat.correct}</span>
-                      <span className="text-rose-400 font-semibold">Incorrect: {stat.incorrect}</span>
-                      <span className="text-slate-400 font-semibold">Unattempted: {stat.unattempted}</span>
-                      <span className="text-amber-300 font-semibold">Time: {Math.floor(stat.totalTime / 60)}m {stat.totalTime % 60}s</span>
+                    <div className="flex flex-wrap justify-between text-[11px] text-[oklch(0.68_0.04_265)] pt-1">
+                      <span className="text-emerald-400">Correct: {stat.correct}</span>
+                      <span className="text-rose-400">Incorrect: {stat.incorrect}</span>
+                      <span>Unattempted: {stat.unattempted}</span>
+                      <span className="text-[oklch(0.94_0.21_118)]">Time: {Math.floor(stat.totalTime / 60)}m {stat.totalTime % 60}s</span>
                     </div>
                   </div>
                 );
@@ -950,24 +1135,24 @@ export default function ExamPortal() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 font-mono text-xs">
             <button
               onClick={() => setStage('solutions')}
-              className="py-3 bg-indigo-600 hover:bg-indigo-500 font-semibold rounded-xl shadow transition cursor-pointer text-xs"
+              className="py-4 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg"
             >
-              📖 View Detailed Solutions
+              📖 View Solutions
             </button>
             <button
               onClick={() => setStage('swot')}
-              className="py-3 bg-purple-600 hover:bg-purple-500 font-semibold rounded-xl shadow transition cursor-pointer text-xs"
+              className="py-4 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg"
             >
-              📊 SWOT Report
+              📊 SWOT Analysis
             </button>
             <button
               onClick={() => setStage('config')}
-              className="py-3 bg-slate-700 hover:bg-slate-600 font-semibold rounded-xl shadow transition cursor-pointer text-xs"
+              className="py-4 bg-[oklch(0.23_0.045_265)] hover:bg-[oklch(0.23_0.045_265)]/80 border border-white/10 text-[oklch(0.96_0.012_265)] font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg"
             >
-              🏠 Dashboard
+              🏠 Main HUD
             </button>
           </div>
         </div>
@@ -975,23 +1160,24 @@ export default function ExamPortal() {
     );
   }
 
+  // SOLUTIONS STAGE
   if (stage === 'solutions') {
     const allQs = Object.values(sectionQuestionsMap).flat();
 
     return (
-      <div className="flex-1 bg-slate-900 text-slate-100 p-4 sm:p-6 flex flex-col items-center overflow-y-auto">
-        <div className="w-full max-w-3xl space-y-6">
-          <div className="flex justify-between items-center bg-slate-800 border border-slate-700 p-4 rounded-xl shadow">
-            <h2 className="text-lg sm:text-xl font-bold text-teal-400">Detailed Solutions</h2>
+      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center overflow-y-auto font-sans">
+        <div className="w-full max-w-4xl space-y-6">
+          <div className="flex justify-between items-center bg-[oklch(0.23_0.045_265)] border border-white/10 p-6 rounded-2xl shadow-xl">
+            <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight text-[oklch(0.94_0.21_118)]">DETAILED SOLUTIONS</h2>
             <button
               onClick={() => setStage('result')}
-              className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-xs font-semibold rounded-lg transition cursor-pointer"
+              className="px-4 py-2 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-wider font-bold rounded-xl transition cursor-pointer"
             >
-              Back
+              ← Back to Debrief
             </button>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             {allQs.map((q, idx) => {
               const studentAnswerId = userAnswers[q.question_id];
               const correctOption = q.question_options?.find((o) => o.is_correct);
@@ -1000,52 +1186,39 @@ export default function ExamPortal() {
               const timeSpentSecs = questionTimers[q.question_id] || 0;
 
               return (
-                <div key={q.question_id} className="bg-slate-800 border border-slate-700 rounded-xl p-4 sm:p-6 shadow space-y-4">
-                  <div className="flex justify-between items-center border-b border-slate-700 pb-3 flex-wrap gap-2">
+                <div key={q.question_id} className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4">
+                  <div className="flex justify-between items-center border-b border-white/10 pb-4 font-mono text-xs flex-wrap gap-2">
                     <div className="flex items-center gap-3">
-                      <span className="font-bold text-sm text-slate-300">Q.No. {idx + 1}</span>
-                      <span className="text-xs font-mono text-amber-400 bg-slate-900 px-2 py-1 rounded border border-slate-700">
+                      <span className="font-bold text-[oklch(0.96_0.012_265)]">Q.No. {idx + 1}</span>
+                      <span className="text-[oklch(0.94_0.21_118)] bg-[oklch(0.16_0.03_265)] px-2.5 py-1 rounded-xl border border-white/10">
                         ⏱️ {timeSpentSecs}s
                       </span>
                     </div>
-                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
-                      !studentAnswerId ? 'bg-slate-700 text-slate-400' : isCorrect ? 'bg-emerald-900/50 text-emerald-300' : 'bg-rose-900/50 text-rose-300'
+                    <span className={`font-bold px-3 py-1 rounded-xl uppercase tracking-wider text-[11px] ${
+                      !studentAnswerId ? 'bg-white/5 text-[oklch(0.68_0.04_265)]' : isCorrect ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
                     }`}>
                       {!studentAnswerId ? 'Unattempted' : isCorrect ? 'Correct' : 'Incorrect'}
                     </span>
                   </div>
 
-                  {(q?.passages?.passage_text || q?.passage_text) && (
-                    <div className="bg-slate-900 p-3 rounded-lg border border-slate-700 text-xs text-slate-300">
-                      <span className="font-bold text-teal-400 block mb-1">Context / Passage:</span>
-                      {q?.passages?.passage_text || q?.passage_text}
-                    </div>
-                  )}
+                  <p className="text-base font-medium font-sans">{q.question_text}</p>
 
-                  {q?.image_url && (
-                    <div className="my-2 flex justify-center bg-slate-900 p-2 rounded-lg border border-slate-700">
-                      <img src={q.image_url} alt="Question Diagram" className="max-h-48 object-contain rounded" />
-                    </div>
-                  )}
-
-                  <p className="text-sm font-medium text-slate-100">{q.question_text}</p>
-
-                  <div className="space-y-2">
+                  <div className="space-y-2 font-mono text-xs">
                     {q.question_options?.map((opt, oIndex) => {
                       const optId = opt.option_id || opt.id;
                       const isStudentChoice = studentAnswerId === optId;
                       const isRightChoice = opt.is_correct;
 
-                      let badgeStyle = 'bg-slate-900 border-slate-700 text-slate-300';
-                      if (isRightChoice) badgeStyle = 'bg-emerald-950/60 border-emerald-600 text-emerald-200';
-                      else if (isStudentChoice && !isRightChoice) badgeStyle = 'bg-rose-950/60 border-rose-600 text-rose-200';
+                      let badgeStyle = 'bg-[oklch(0.16_0.03_265)] border-white/5 text-[oklch(0.68_0.04_265)]';
+                      if (isRightChoice) badgeStyle = 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
+                      else if (isStudentChoice && !isRightChoice) badgeStyle = 'bg-rose-500/10 border-rose-500/30 text-rose-300';
 
                       return (
-                        <div key={optId} className={`p-3 rounded-lg border text-xs sm:text-sm flex items-center justify-between ${badgeStyle}`}>
+                        <div key={optId} className={`p-3.5 rounded-2xl border flex items-center justify-between ${badgeStyle}`}>
                           <span>({String.fromCharCode(65 + oIndex)}) {opt.option_text}</span>
-                          <span className="text-[10px] sm:text-xs font-semibold shrink-0 ml-2">
-                            {isStudentChoice && '[Your Answer] '}
-                            {isRightChoice && '[Correct]'}
+                          <span className="font-bold tracking-wider">
+                            {isStudentChoice && '[YOUR PICK] '}
+                            {isRightChoice && '[CORRECT]'}
                           </span>
                         </div>
                       );
@@ -1053,9 +1226,9 @@ export default function ExamPortal() {
                   </div>
 
                   {q.solution_explanation && (
-                    <div className="bg-slate-900 p-3 rounded-lg border border-slate-700 text-xs text-slate-300 mt-2">
-                      <span className="font-bold text-teal-400 block mb-1">Explanation:</span>
-                      {q.solution_explanation}
+                    <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/10 font-mono text-xs space-y-1">
+                      <span className="text-[oklch(0.94_0.21_118)] font-bold uppercase tracking-wider block">Solution Breakdown:</span>
+                      <p className="font-sans text-[oklch(0.68_0.04_265)] leading-relaxed">{q.solution_explanation}</p>
                     </div>
                   )}
                 </div>
@@ -1067,39 +1240,40 @@ export default function ExamPortal() {
     );
   }
 
+  // SWOT STAGE
   if (stage === 'swot') {
     return (
-      <div className="flex-1 bg-slate-900 text-slate-100 p-4 sm:p-6 flex flex-col items-center">
-        <div className="w-full max-w-2xl bg-slate-800 border border-slate-700 rounded-xl p-4 sm:p-6 shadow-xl space-y-6">
-          <div className="flex justify-between items-center border-b border-slate-700 pb-4">
-            <h2 className="text-lg sm:text-xl font-bold text-purple-400">SWOT Analytics Report</h2>
+      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center font-sans">
+        <div className="w-full max-w-2xl bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl space-y-6">
+          <div className="flex justify-between items-center border-b border-white/10 pb-4">
+            <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight text-purple-400">SWOT ANALYTICS REPORT</h2>
             <button
               onClick={() => setStage('result')}
-              className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-xs font-semibold rounded-lg transition cursor-pointer"
+              className="px-4 py-2 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-wider font-bold rounded-xl transition cursor-pointer"
             >
-              Back
+              ← Back
             </button>
           </div>
 
-          <div className="space-y-4">
-            <div className="p-4 bg-emerald-950/40 border border-emerald-700 rounded-lg">
-              <h3 className="text-sm font-bold text-emerald-400">💪 Strengths</h3>
-              <p className="text-xs text-slate-300 mt-1">High command over core reasoning and quantitative questions.</p>
+          <div className="space-y-4 font-mono text-xs">
+            <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl space-y-1">
+              <h3 className="font-bold text-emerald-400 uppercase tracking-widest">💪 Strengths</h3>
+              <p className="font-sans text-[oklch(0.68_0.04_265)]">High command over core reasoning and quantitative modules.</p>
             </div>
 
-            <div className="p-4 bg-amber-950/40 border border-amber-700 rounded-lg">
-              <h3 className="text-sm font-bold text-amber-400">⚠️ Weaknesses</h3>
-              <p className="text-xs text-slate-300 mt-1">Calculation-heavy items required longer time allocations.</p>
+            <div className="p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-1">
+              <h3 className="font-bold text-amber-400 uppercase tracking-widest">⚠️ Weaknesses</h3>
+              <p className="font-sans text-[oklch(0.68_0.04_265)]">Calculation-heavy items required excessive time allocations.</p>
             </div>
 
-            <div className="p-4 bg-blue-950/40 border border-blue-700 rounded-lg">
-              <h3 className="text-sm font-bold text-blue-400">🎯 Opportunities</h3>
-              <p className="text-xs text-slate-300 mt-1">Improve reading comprehension pacing to secure easy points.</p>
+            <div className="p-5 bg-blue-500/10 border border-blue-500/30 rounded-2xl space-y-1">
+              <h3 className="font-bold text-blue-400 uppercase tracking-widest">🎯 Opportunities</h3>
+              <p className="font-sans text-[oklch(0.68_0.04_265)]">Improve reading comprehension pacing to secure quick points.</p>
             </div>
 
-            <div className="p-4 bg-rose-950/40 border border-rose-700 rounded-lg">
-              <h3 className="text-sm font-bold text-rose-400">🚨 Threats</h3>
-              <p className="text-xs text-slate-300 mt-1">Negative marking risk from uncalculated guesswork.</p>
+            <div className="p-5 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-1">
+              <h3 className="font-bold text-rose-400 uppercase tracking-widest">🚨 Threats</h3>
+              <p className="font-sans text-[oklch(0.68_0.04_265)]">Negative marking exposure from uncalculated guesswork.</p>
             </div>
           </div>
         </div>

@@ -57,7 +57,10 @@ export default function BulkExcelUploader() {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
-  const [previewData, setPreviewData] = useState([]);
+  
+  // Validation Preview States
+  const [validRows, setValidRows] = useState([]);
+  const [invalidRows, setInvalidRows] = useState([]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -91,20 +94,6 @@ export default function BulkExcelUploader() {
         option_4: "180",
         correct_option_number: 2,
         solution_explanation: "Sum of revenues divided by total years gives 140."
-      },
-      {
-        subtopic_name: "Data Interpretation",
-        difficulty_level: "Medium",
-        "Image URL": "",
-        passage_id: "DI_SET_01",
-        passage_text: "",
-        question_text: "What is the percentage increase in revenue for Company B from 2001 to 2002?",
-        option_1: "12.5%",
-        option_2: "15%",
-        option_3: "20%",
-        option_4: "25%",
-        correct_option_number: 4,
-        solution_explanation: "Percentage increase formula yields 25%."
       }
     ];
 
@@ -118,6 +107,7 @@ export default function BulkExcelUploader() {
     const uploadedFile = e.target.files[0];
     if (!uploadedFile) return;
     setFile(uploadedFile);
+    setStatusMessage('Analyzing and validating rows...');
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -127,18 +117,50 @@ export default function BulkExcelUploader() {
         const wsname = workbook.SheetNames[0];
         const ws = workbook.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws);
-        setPreviewData(data);
+
+        let valid = [];
+        let invalid = [];
+
+        data.forEach((row, index) => {
+          let errors = [];
+          const qText = row.question_text || row.Question;
+          const opt1 = row.option_1 ?? row.Opt1;
+          const opt2 = row.option_2 ?? row.Opt2;
+          const correctNum = row.correct_option_number || row.CorrectAnswer;
+
+          if (!qText || String(qText).trim() === '') {
+            errors.push('Missing question text');
+          }
+          if (!opt1 || !opt2) {
+            errors.push('Requires at least 2 options');
+          }
+          if (!correctNum) {
+            errors.push('Missing correct option number');
+          }
+
+          if (errors.length > 0) {
+            invalid.push({ rowNumber: index + 2, data: row, errors });
+          } else {
+            valid.push({ rowNumber: index + 2, data: row });
+          }
+        });
+
+        setValidRows(valid);
+        setInvalidRows(invalid);
+        setStatusMessage(`Validation complete: ${valid.length} valid rows, ${invalid.length} invalid rows skipped.`);
       } catch (err) {
         console.error(err);
         setStatusMessage('Error parsing Excel file format.');
+        setValidRows([]);
+        setInvalidRows([]);
       }
     };
     reader.readAsBinaryString(uploadedFile);
   };
 
   const handleUpload = async () => {
-    if (!file || previewData.length === 0) {
-      setStatusMessage('Please select a valid Excel file first.');
+    if (validRows.length === 0) {
+      setStatusMessage('No valid rows available to import.');
       return;
     }
     if (!selectedSection) {
@@ -147,7 +169,7 @@ export default function BulkExcelUploader() {
     }
 
     setLoading(true);
-    setStatusMessage(`Preparing ${previewData.length} questions for batch upload...`);
+    setStatusMessage(`Preparing ${validRows.length} validated questions for batch upload...`);
 
     try {
       let { data: existingSubtopics } = await supabase
@@ -168,7 +190,8 @@ export default function BulkExcelUploader() {
       let currentActivePassageText = null;
       let currentActiveImageUrl = null;
 
-      for (const row of previewData) {
+      for (const item of validRows) {
+        const row = item.data;
         const subtopicName = (row.subtopic_name || row.Subtopic || 'General Practice').trim();
         const difficulty = row.difficulty_level || row.Difficulty || 'Medium';
         
@@ -185,7 +208,6 @@ export default function BulkExcelUploader() {
         const qText = row.question_text || row.Question;
         const explanation = row.solution_explanation || row.Explanation || 'Standard step-by-step solution.';
         
-        // Safeguard fallbacks for unpopulated or browser-parsed undefined option cells
         const opt1 = row.option_1 ?? row.Opt1 ?? 'Option A';
         const opt2 = row.option_2 ?? row.Opt2 ?? 'Option B';
         const opt3 = row.option_3 ?? row.Opt3 ?? 'Option C';
@@ -240,7 +262,6 @@ export default function BulkExcelUploader() {
 
       if (passagesToInsert.length > 0) {
         setStatusMessage('Uploading passages in batches...');
-        // Deduplicate passages by passage_id
         const uniquePassagesMap = new Map();
         passagesToInsert.forEach(p => uniquePassagesMap.set(p.passage_id, p));
         const uniquePassages = Array.from(uniquePassagesMap.values());
@@ -266,9 +287,10 @@ export default function BulkExcelUploader() {
         if (optErr) throw optErr;
       }
 
-      setStatusMessage(`Successfully uploaded ${successCount} questions in seconds!`);
+      setStatusMessage(`Successfully uploaded ${successCount} clean questions in seconds!`);
       setFile(null);
-      setPreviewData([]);
+      setValidRows([]);
+      setInvalidRows([]);
     } catch (err) {
       console.error(err);
       setStatusMessage('Upload failed: ' + err.message);
@@ -279,13 +301,16 @@ export default function BulkExcelUploader() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
-        <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-xl space-y-4">
-          <h2 className="text-xl font-bold text-teal-400 text-center">Admin Access Required</h2>
-          <p className="text-xs text-slate-400 text-center">Please enter your password to access the admin portal.</p>
+      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex items-center justify-center p-4 font-sans min-h-[80vh]">
+        <div className="w-full max-w-sm bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-2xl p-6 shadow-2xl space-y-4 backdrop-blur-xl">
+          <div className="flex items-center gap-2 justify-center mb-2">
+            <div className="w-8 h-8 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-black flex items-center justify-center rounded-xl text-sm font-['Archivo_Black']">T</div>
+            <span className="font-extrabold tracking-tighter text-lg font-['Archivo_Black'] text-[oklch(0.96_0.012_265)]">TRYVO</span>
+          </div>
+          <h2 className="text-xs font-mono tracking-[0.15em] text-center text-[oklch(0.68_0.04_265)] uppercase">Admin Access Required</h2>
 
           {authError && (
-            <div className="p-2 bg-rose-900/50 border border-rose-700 text-rose-300 text-xs rounded text-center">
+            <div className="p-2.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs rounded-xl text-center font-mono">
               {authError}
             </div>
           )}
@@ -293,16 +318,16 @@ export default function BulkExcelUploader() {
           <form onSubmit={handleLogin} className="space-y-4">
             <input
               type="password"
-              placeholder="Enter Admin Password"
+              placeholder="ENTER ADMIN PASSWORD"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 rounded p-2.5 text-slate-200 text-sm focus:outline-none focus:border-teal-500"
+              className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3 text-sm text-[oklch(0.96_0.012_265)] font-mono focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition"
             />
             <button
               type="submit"
-              className="w-full py-2.5 bg-teal-600 hover:bg-teal-500 text-white font-semibold rounded-lg shadow transition cursor-pointer"
+              className="w-full py-3 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono font-bold uppercase tracking-[0.15em] text-xs rounded-xl shadow-[0_0_20px_rgba(204,255,0,0.2)] transition cursor-pointer"
             >
-              Login to Admin
+              Authenticate →
             </button>
           </form>
         </div>
@@ -311,36 +336,40 @@ export default function BulkExcelUploader() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-6 flex flex-col items-center">
-      <div className="w-full max-w-2xl bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-xl space-y-6">
+    <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center font-sans relative">
+      <div className="w-full max-w-3xl bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 backdrop-blur-xl">
         
         {/* Admin Nav Switcher Tabs */}
-        <div className="flex justify-between items-center border-b border-slate-700 pb-4">
-          <div className="flex gap-2">
+        <div className="flex justify-between items-center border-b border-white/10 pb-4">
+          <div className="flex gap-2 font-mono text-xs tracking-wider">
             <button
               onClick={() => setAdminTab('uploader')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                adminTab === 'uploader' ? 'bg-teal-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              className={`px-4 py-2 rounded-xl uppercase font-bold transition cursor-pointer ${
+                adminTab === 'uploader' 
+                  ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]' 
+                  : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] hover:text-[oklch(0.96_0.012_265)] border border-white/5'
               }`}
             >
-              📥 Bulk Uploader
+              Uploader
             </button>
             <button
               onClick={() => {
                 setAdminTab('analytics');
                 fetchAnalyticsData();
               }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                adminTab === 'analytics' ? 'bg-teal-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              className={`px-4 py-2 rounded-xl uppercase font-bold transition cursor-pointer ${
+                adminTab === 'analytics' 
+                  ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]' 
+                  : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] hover:text-[oklch(0.96_0.012_265)] border border-white/5'
               }`}
             >
-              📊 Visitor Analytics
+              Analytics
             </button>
           </div>
 
           <button
             onClick={() => setIsAuthenticated(false)}
-            className="px-3 py-1.5 bg-rose-900/50 hover:bg-rose-900 text-rose-300 text-xs font-semibold rounded-lg border border-rose-700 transition cursor-pointer"
+            className="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-mono text-[11px] tracking-wider uppercase font-bold rounded-xl border border-rose-500/30 transition cursor-pointer"
           >
             Lock Out
           </button>
@@ -349,67 +378,103 @@ export default function BulkExcelUploader() {
         {/* Tab 1: Bulk Question Uploader */}
         {adminTab === 'uploader' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
-              <h2 className="text-xl font-bold text-teal-400">Bulk Excel Uploader</h2>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">BULK QUESTION INGESTION</h2>
+                <p className="text-xs font-mono text-[oklch(0.68_0.04_265)] mt-1 tracking-wider uppercase">Pre-flight validation engine active</p>
+              </div>
               <button
                 onClick={downloadTemplate}
-                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-teal-300 text-xs font-semibold rounded-lg border border-slate-600 transition cursor-pointer"
+                className="px-4 py-2 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.94_0.21_118)] font-mono text-xs uppercase tracking-[0.15em] font-bold rounded-xl border border-[oklch(0.94_0.21_118)]/30 transition cursor-pointer shadow-[0_0_15px_rgba(204,255,0,0.1)]"
               >
-                📥 Download Template
+                ↓ Template Sheet
               </button>
             </div>
 
             {statusMessage && (
-              <div className="p-3 rounded text-sm bg-slate-900 border border-slate-700 text-teal-300">
+              <div className="p-3.5 rounded-xl text-xs font-mono bg-[oklch(0.16_0.03_265)] border border-white/10 text-[oklch(0.94_0.21_118)] flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[oklch(0.94_0.21_118)] animate-pulse"></span>
                 {statusMessage}
               </div>
             )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Target Section</label>
+              <label className="block font-mono text-xs uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Target Section Module</label>
               <select
                 value={selectedSection}
                 onChange={(e) => setSelectedSection(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none"
+                className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] font-mono focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
               >
                 {sections.length > 0 ? (
                   sections.map((sec) => (
-                    <option key={sec.section_id} value={sec.section_id}>
+                    <option key={sec.section_id} value={sec.section_id} className="bg-[oklch(0.16_0.03_265)] text-white">
                       {sec.section_name}
                     </option>
                   ))
                 ) : (
-                  <option value="">No sections available (Check Supabase API Key)</option>
+                  <option value="" className="bg-[oklch(0.16_0.03_265)] text-white">No sections available</option>
                 )}
               </select>
             </div>
 
-            <div className="border-2 border-dashed border-slate-700 rounded-xl p-6 text-center">
+            <div className="border-2 border-dashed border-white/10 rounded-2xl p-8 text-center bg-[oklch(0.16_0.03_265)]/50 hover:border-[oklch(0.94_0.21_118)]/50 transition cursor-pointer relative group">
               <input
                 type="file"
                 accept=".xlsx, .xls, .csv"
                 onChange={handleFileChange}
-                className="w-full text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-teal-600 file:text-white hover:file:bg-teal-500 cursor-pointer"
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
+              <div className="space-y-2 pointer-events-none">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/20 flex items-center justify-center text-[oklch(0.94_0.21_118)] text-xl font-mono">
+                  📂
+                </div>
+                <p className="font-mono text-xs uppercase tracking-wider text-[oklch(0.96_0.012_265)] font-bold">
+                  {file ? file.name : 'Drop Excel/CSV dataset or browse'}
+                </p>
+                <p className="font-mono text-[10px] text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Automatic schema pre-check enforced</p>
+              </div>
             </div>
 
-            {previewData.length > 0 && (
-              <div className="bg-slate-900 p-4 rounded-lg border border-slate-700 max-h-48 overflow-y-auto">
-                <h3 className="text-sm font-semibold text-slate-400 mb-2">Preview ({previewData.length} rows detected):</h3>
-                <ul className="space-y-1 text-xs text-slate-300">
-                  {previewData.slice(0, 5).map((row, i) => (
-                    <li key={i} className="truncate">• [{row.subtopic_name || 'General'}] {row.question_text || row.Question}</li>
-                  ))}
-                </ul>
+            {/* Validation Feedback Summary Cards */}
+            {(validRows.length > 0 || invalidRows.length > 0) && (
+              <div className="space-y-4 font-mono">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-[0.15em] block">Ready to Drop</span>
+                      <span className="text-2xl font-black text-emerald-300 font-['Archivo_Black']">{validRows.length}</span>
+                    </div>
+                    <span className="text-lg">⚡</span>
+                  </div>
+                  <div className="bg-rose-500/10 border border-rose-500/30 p-4 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-rose-400 font-bold uppercase tracking-[0.15em] block">Rejected Rows</span>
+                      <span className="text-2xl font-black text-rose-300 font-['Archivo_Black']">{invalidRows.length}</span>
+                    </div>
+                    <span className="text-lg">🛡️</span>
+                  </div>
+                </div>
+
+                {invalidRows.length > 0 && (
+                  <div className="bg-[oklch(0.16_0.03_265)] rounded-2xl border border-rose-500/20 p-4 max-h-48 overflow-y-auto space-y-2">
+                    <h4 className="text-[11px] font-bold text-rose-400 uppercase tracking-[0.15em]">Rejected Dataset Log:</h4>
+                    {invalidRows.map((inv, i) => (
+                      <div key={i} className="text-xs text-[oklch(0.68_0.04_265)] flex justify-between items-center border-b border-white/5 pb-1.5">
+                        <span className="truncate pr-2">Row #{inv.rowNumber}: <span className="text-[oklch(0.96_0.012_265)]">{inv.data.question_text || inv.data.Question || 'Blank Question'}</span></span>
+                        <span className="text-rose-400 shrink-0 font-bold text-[10px] bg-rose-500/10 px-2 py-0.5 rounded">{inv.errors.join(', ')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
             <button
               onClick={handleUpload}
-              disabled={loading || previewData.length === 0}
-              className="w-full py-3 bg-teal-600 hover:bg-teal-500 text-white font-semibold rounded-lg shadow transition disabled:opacity-50 cursor-pointer"
+              disabled={loading || validRows.length === 0}
+              className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition disabled:opacity-40 cursor-pointer"
             >
-              {loading ? 'Processing Batches...' : 'Upload All to Supabase'}
+              {loading ? 'PROCESSING BATCHES...' : `DEPLOY ${validRows.length} VALID QUESTIONS TO TRYVO →`}
             </button>
           </div>
         )}
@@ -419,45 +484,45 @@ export default function BulkExcelUploader() {
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <div>
-                <h2 className="text-xl font-bold text-teal-400">Portal Traffic & Geographic Insights</h2>
-                <p className="text-xs text-slate-400">Live telemetry of user site visits sorted by town/city.</p>
+                <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">TRAFFIC TELEMETRY</h2>
+                <p className="text-xs font-mono text-[oklch(0.68_0.04_265)] mt-1 tracking-wider uppercase">Live regional user distribution feed</p>
               </div>
               <button
                 onClick={fetchAnalyticsData}
-                className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-teal-300 text-xs font-semibold rounded-lg border border-slate-600 transition cursor-pointer"
+                className="px-4 py-2 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.94_0.21_118)] font-mono text-xs uppercase tracking-[0.15em] font-bold rounded-xl border border-[oklch(0.94_0.21_118)]/30 transition cursor-pointer shadow-[0_0_15px_rgba(204,255,0,0.1)]"
               >
-                🔄 Refresh Data
+                ↻ Refresh Stream
               </button>
             </div>
 
             {analyticsLoading ? (
-              <div className="text-center py-8 text-slate-400 text-xs">Loading analytics data...</div>
+              <div className="text-center py-12 text-[oklch(0.68_0.04_265)] font-mono text-xs uppercase tracking-widest animate-pulse">Syncing telemetry data...</div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-4 font-mono">
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
-                    <span className="text-[11px] uppercase tracking-wider text-slate-400 font-bold block">Total Site Visits</span>
-                    <span className="text-2xl font-black text-teal-300 mt-1 block">{totalVisits}</span>
+                  <div className="bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-2xl p-5">
+                    <span className="text-[10px] uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] font-bold block">Total Grinders</span>
+                    <span className="text-3xl font-black text-[oklch(0.94_0.21_118)] mt-2 block font-['Archivo_Black']">{totalVisits}</span>
                   </div>
-                  <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
-                    <span className="text-[11px] uppercase tracking-wider text-slate-400 font-bold block">Active Cities / Towns</span>
-                    <span className="text-2xl font-black text-indigo-400 mt-1 block">{townStats.length}</span>
+                  <div className="bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-2xl p-5">
+                    <span className="text-[10px] uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] font-bold block">Active Zones</span>
+                    <span className="text-3xl font-black text-[oklch(0.68_0.16_245)] mt-2 block font-['Archivo_Black']">{townStats.length}</span>
                   </div>
                 </div>
 
                 {/* City-by-City Breakdown List */}
-                <div className="bg-slate-900 border border-slate-700 rounded-xl p-4 space-y-3">
-                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">Users per City / Town</h3>
+                <div className="bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-2xl p-5 space-y-3">
+                  <h3 className="text-[11px] font-bold text-[oklch(0.96_0.012_265)] uppercase tracking-[0.15em]">Regional Grid Activity</h3>
                   
                   {townStats.length === 0 ? (
-                    <p className="text-xs text-slate-500">No regional user data recorded yet.</p>
+                    <p className="text-xs text-[oklch(0.68_0.04_265)] py-4 text-center">No telemetry pings recorded yet.</p>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       {townStats.map((stat, idx) => (
-                        <div key={idx} className="bg-slate-800 border border-slate-700/60 p-3 rounded-lg flex justify-between items-center">
-                          <span className="text-xs font-semibold text-slate-200">{stat.town}</span>
-                          <span className="bg-teal-950/80 border border-teal-700 text-teal-300 px-2.5 py-1 rounded-md font-mono font-bold text-xs">
-                            {stat.count} {stat.count === 1 ? 'user' : 'users'}
+                        <div key={idx} className="bg-[oklch(0.23_0.045_265)] border border-white/5 p-3.5 rounded-xl flex justify-between items-center">
+                          <span className="text-xs font-bold text-[oklch(0.96_0.012_265)]">{stat.town}</span>
+                          <span className="bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)] px-2.5 py-1 rounded-lg font-mono font-bold text-xs">
+                            {stat.count} {stat.count === 1 ? 'ping' : 'pings'}
                           </span>
                         </div>
                       ))}
@@ -466,26 +531,26 @@ export default function BulkExcelUploader() {
                 </div>
 
                 {/* Detailed Percentage Breakdown Table */}
-                <div className="bg-slate-900 border border-slate-700 rounded-xl p-4">
-                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-3">Detailed Share Distribution</h3>
+                <div className="bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-2xl p-5">
+                  <h3 className="text-[11px] font-bold text-[oklch(0.96_0.012_265)] uppercase tracking-[0.15em] mb-4">Traffic Share Distribution</h3>
                   {townStats.length > 0 && (
-                    <div className="overflow-x-auto max-h-48 overflow-y-auto">
+                    <div className="overflow-x-auto max-h-52 overflow-y-auto">
                       <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-800 text-slate-400 uppercase tracking-wider sticky top-0">
+                        <thead className="bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] uppercase tracking-[0.15em] sticky top-0 font-bold">
                           <tr>
-                            <th className="p-2.5">Town / City</th>
-                            <th className="p-2.5 text-right">User Count</th>
-                            <th className="p-2.5 text-right">Traffic Share</th>
+                            <th className="p-3">Zone / City</th>
+                            <th className="p-3 text-right">Pings</th>
+                            <th className="p-3 text-right">Share</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-800">
+                        <tbody className="divide-y divide-white/5">
                           {townStats.map((stat, idx) => {
                             const percent = totalVisits > 0 ? ((stat.count / totalVisits) * 100).toFixed(1) : 0;
                             return (
-                              <tr key={idx}>
-                                <td className="p-2.5 font-medium text-slate-200">{stat.town}</td>
-                                <td className="p-2.5 text-right font-mono text-teal-300">{stat.count}</td>
-                                <td className="p-2.5 text-right font-mono text-slate-400">{percent}%</td>
+                              <tr key={idx} className="hover:bg-white/[0.02] transition">
+                                <td className="p-3 font-medium text-[oklch(0.96_0.012_265)]">{stat.town}</td>
+                                <td className="p-3 text-right font-mono text-[oklch(0.94_0.21_118)] font-bold">{stat.count}</td>
+                                <td className="p-3 text-right font-mono text-[oklch(0.68_0.04_265)]">{percent}%</td>
                               </tr>
                             );
                           })}
