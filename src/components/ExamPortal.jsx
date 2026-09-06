@@ -15,9 +15,10 @@ const shuffleArray = (array) => {
 };
 
 export default function ExamPortal() {
-  const [stage, setStage] = useState('config'); // 'config' | 'exam' | 'result' | 'solutions' | 'swot'
+  const [stage, setStage] = useState('config'); // 'config' | 'exam' | 'result' | 'solutions' | 'swot' | 'construction'
   const [exams, setExams] = useState([]);
   const [subtopics, setSubtopics] = useState([]);
+  const [constructionTitle, setConstructionTitle] = useState('');
   
   const [selectedExamId, setSelectedExamId] = useState('');
   const [testMode, setTestMode] = useState('Full-Length Mock'); // 'Full-Length Mock' | 'Time-Based Practice' | 'Topic-Based'
@@ -184,6 +185,7 @@ export default function ExamPortal() {
 
         const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
         const { data: allSubtopics } = await supabase.from('subtopics').select('*');
+        const { data: allOptions } = await supabase.from('question_options').select('*');
 
         for (let i = 0; i < sectionsData.length; i++) {
           const sec = sectionsData[i];
@@ -211,26 +213,14 @@ export default function ExamPortal() {
           const groupedQData = groupPassageQuestions(shuffledQData);
           const limitedQuestions = groupedQData.slice(0, quota);
 
-          // Collect question IDs for this section to fetch options safely
-          const qIds = limitedQuestions.map(q => q.question_id || q.id);
-
-          // Fetch options matching these specific questions
-          const { data: sectionOptions, error: optErr } = await supabase
-            .from('question_options')
-            .select('*')
-            .in('question_id', qIds);
-
-          if (optErr) console.error("Error fetching options:", optErr);
-
-          console.log(`Section ${sec.section_name}: Loaded`, limitedQuestions.length, "questions and", sectionOptions?.length || 0, "options.");
-
           finalSectionMap[secId] = limitedQuestions.map(q => {
             const qId = q.question_id || q.id;
-            
-            const rawOpts = (sectionOptions || []).filter(o => {
-              const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
-              return optQId === String(qId).trim() || optQId === String(q.id).trim();
-            });
+            const rawOpts = (allOptions || []).filter(o => 
+              String(o.question_id) === String(qId) || 
+              String(o.qid) === String(qId) || 
+              String(o.questionId) === String(qId) ||
+              String(o.q_id) === String(qId)
+            );
 
             return {
               ...q,
@@ -255,39 +245,101 @@ export default function ExamPortal() {
         setVisitedQuestions(firstQId ? new Set([firstQId]) : new Set());
         setStage('exam');
       } 
-      else {
-        let loadedQuestions = [];
-        if (testMode === 'Time-Based Practice') {
-          testDurationMinutes = Number(practiceMinutes);
-          const { data: qData } = await supabase.from('questions').select('*, passages(*)').limit(20);
-          loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
-        } else {
-          testDurationMinutes = 15;
-          const { data: qData } = await supabase.from('questions').select('*, passages(*)').eq('subtopic_id', selectedSubtopicId);
-          loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
-        }
+      else if (testMode === 'Time-Based Practice') {
+        testDurationMinutes = Number(practiceMinutes);
+        const totalSeconds = testDurationMinutes * 60;
+        const timePerCategory = totalSeconds / 3;
 
-        if (loadedQuestions.length === 0) {
-          alert('No questions found for this configuration.');
+        const englishQuota = Math.max(1, Math.floor(timePerCategory / 30));
+        const numericalQuota = Math.max(1, Math.floor(timePerCategory / 40));
+        const reasoningQuota = Math.max(1, Math.floor(timePerCategory / 40));
+
+        const sprintSections = [
+          { section_id: 'SPRINT_ENG', section_name: 'English Language', quota: englishQuota, timeSec: timePerCategory },
+          { section_id: 'SPRINT_NUM', section_name: 'Numerical Ability', quota: numericalQuota, timeSec: timePerCategory },
+          { section_id: 'SPRINT_REA', section_name: 'Reasoning Ability', quota: reasoningQuota, timeSec: timePerCategory }
+        ];
+
+        const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
+        const { data: allSubtopics } = await supabase.from('subtopics').select('*');
+        const { data: allOptions } = await supabase.from('question_options').select('*');
+
+        if (!allQuestions || allQuestions.length === 0) {
+          alert('No questions found in database.');
           setLoading(false);
           return;
         }
 
-        const qIds = loadedQuestions.map(q => q.question_id || q.id);
-        const { data: sectionOptions } = await supabase
-          .from('question_options')
-          .select('*')
-          .in('question_id', qIds);
+        let finalSectionMap = {};
+        let initialSectionTimes = {};
 
+        sprintSections.forEach(sec => {
+          initialSectionTimes[sec.section_id] = sec.timeSec;
+          const matchingSubs = allSubtopics?.filter(s => s.subtopic_name?.toLowerCase().includes(sec.section_name.toLowerCase().split(' ')[0]))?.map(s => s.subtopic_id || s.id) || [];
+          
+          let secQuestions = allQuestions.filter(q => matchingSubs.includes(q.subtopic_id));
+          if (secQuestions.length === 0) {
+            const chunk = Math.ceil(allQuestions.length / 3);
+            const index = sprintSections.indexOf(sec);
+            secQuestions = allQuestions.slice(index * chunk, (index + 1) * chunk);
+          }
+
+          const shuffled = groupPassageQuestions(shuffleArray(secQuestions)).slice(0, sec.quota);
+          
+          finalSectionMap[sec.section_id] = shuffled.map(q => {
+            const qId = q.question_id || q.id;
+            const rawOpts = (allOptions || []).filter(o => 
+              String(o.question_id) === String(qId) || 
+              String(o.qid) === String(qId) || 
+              String(o.questionId) === String(qId) ||
+              String(o.q_id) === String(qId)
+            );
+
+            return {
+              ...q,
+              question_id: qId,
+              question_options: rawOpts.length > 0 ? shuffleArray(rawOpts) : []
+            };
+          });
+        });
+
+        setSections(sprintSections);
+        setSectionQuestionsMap(finalSectionMap);
+        setSectionTimeLefts(initialSectionTimes);
+        setCompletedSections(new Set());
+        setActiveSectionIndex(0);
+        setCurrentIndex(0);
+        setTimeLeft(totalSeconds);
+        setUserAnswers({});
+        setQuestionTimers({});
+        setReviewStatus({});
+        const firstSecId = sprintSections[0].section_id;
+        const firstQId = finalSectionMap[firstSecId]?.[0]?.question_id;
+        setVisitedQuestions(firstQId ? new Set([firstQId]) : new Set());
+        setStage('exam');
+      }
+      else {
+        testDurationMinutes = 15;
+        const { data: qData } = await supabase.from('questions').select('*, passages(*)').eq('subtopic_id', selectedSubtopicId);
+        const loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
+
+        if (loadedQuestions.length === 0) {
+          alert('No questions found for this topic.');
+          setLoading(false);
+          return;
+        }
+
+        const { data: allOptions } = await supabase.from('question_options').select('*');
         const qIdKey = loadedQuestions[0].question_id !== undefined ? 'question_id' : 'id';
 
         const finalQuestions = loadedQuestions.map(q => {
           const qId = q[qIdKey];
-          
-          const rawOpts = (sectionOptions || []).filter(o => {
-            const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
-            return optQId === String(qId).trim() || optQId === String(q.id).trim();
-          });
+          const rawOpts = (allOptions || []).filter(o => 
+            String(o.question_id) === String(qId) || 
+            String(o.qid) === String(qId) || 
+            String(o.questionId) === String(qId) ||
+            String(o.q_id) === String(qId)
+          );
 
           return {
             ...q,
@@ -534,6 +586,26 @@ export default function ExamPortal() {
     return 'bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] hover:border-[oklch(0.94_0.21_118)]';
   };
 
+  // CONSTRUCTION STAGE VIEW
+  if (stage === 'construction') {
+    return (
+      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col items-center justify-center p-8 text-center space-y-4 font-sans">
+        <h1 className="text-3xl sm:text-5xl font-extrabold font-['Archivo_Black'] text-[oklch(0.94_0.21_118)]">
+          {constructionTitle} Under Construction
+        </h1>
+        <p className="font-mono text-sm text-[oklch(0.68_0.04_265)] uppercase tracking-wider">
+          We are building something awesome. Check back soon!
+        </p>
+        <button 
+          onClick={() => setStage('config')}
+          className="mt-4 px-6 py-3 bg-[oklch(0.23_0.045_265)] hover:bg-[oklch(0.23_0.045_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-widest rounded-xl transition cursor-pointer"
+        >
+          ← Return to Config
+        </button>
+      </div>
+    );
+  }
+
   // CONFIG STAGE
   if (stage === 'config') {
     return (
@@ -561,17 +633,34 @@ export default function ExamPortal() {
                 <span className="text-[oklch(0.94_0.21_118)] drop-shadow-[0_0_30px_rgba(204,255,0,0.3)]">Own the rank.</span>
               </h1>
               <p className="text-sm sm:text-base text-[oklch(0.68_0.04_265)] font-sans max-w-xl leading-relaxed pt-2">
-                Real timed mock tests, live percentile drops, and streaks that punish you for quitting. Built for the JEE, NEET, UPSC, SSC and CAT grinders who play to win.
+                Students who consistently practice with mock tests outperform passive learners by an average of 15 to 25 percentage points.
               </p>
             </div>
 
-            {/* Exam Tag Row */}
-            <div className="flex flex-wrap gap-2 pt-2">
+            {/* Exam Tag Row with Links */}
+            <div className="flex flex-wrap gap-2 pt-2 items-center font-mono text-xs">
+              <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-wider mr-1">Grinders:</span>
               {['JEE', 'NEET', 'UPSC', 'SSC', 'CAT'].map((tag, i) => (
-                <span key={i} className="px-3 py-1 rounded-lg bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-[11px] uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)]">
+                <button
+                  key={i}
+                  onClick={() => {
+                    setConstructionTitle(tag);
+                    setStage('construction');
+                  }}
+                  className="px-3 py-1 rounded-lg bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-[11px] uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] hover:bg-[oklch(0.94_0.21_118)] hover:text-[oklch(0.16_0.03_265)] transition cursor-pointer font-bold"
+                >
                   {tag}
-                </span>
+                </button>
               ))}
+              <button
+                onClick={() => {
+                  const configElement = document.getElementById('session-config-section');
+                  if (configElement) configElement.scrollIntoView({ behavior: 'smooth' });
+                }}
+                className="px-3 py-1 rounded-lg bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-[11px] uppercase tracking-[0.15em] hover:brightness-110 transition cursor-pointer font-extrabold shadow-[0_0_10px_rgba(204,255,0,0.2)]"
+              >
+                SBI →
+              </button>
             </div>
           </div>
 
@@ -739,7 +828,7 @@ export default function ExamPortal() {
 
             {testMode === 'Time-Based Practice' && (
               <div>
-                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Sprint Duration</label>
+                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Sprint Duration (Eng: 30s/q | Num/Reas: 40s/q)</label>
                 <div className="grid grid-cols-4 gap-2.5">
                   {[10, 15, 30, 45].map((mins) => (
                     <button
