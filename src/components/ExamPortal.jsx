@@ -1,9 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = 'https://wbcdiewohpngqbeqrfmb.supabase.co';
-const supabaseAnonKey = 'sb_publishable_d21wos13j9x7K-w1h8vsvw_0gPm_jlY';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+import { supabase } from '../supabaseClient';
 
 const shuffleArray = (array) => {
   const shuffled = [...array];
@@ -163,6 +159,17 @@ export default function ExamPortal() {
         testDurationMinutes = activeExam.duration_minutes || 60;
       }
 
+      // Fetch all questions, subtopics, and options globally with debug logs
+      const { data: allQuestions, error: qErr } = await supabase.from('questions').select('*, passages(*)');
+      const { data: allSubtopics, error: subErr } = await supabase.from('subtopics').select('*');
+      const { data: allOptions, error: optErr } = await supabase.from('question_options').select('*').range(0, 9999).limit(5000);
+
+      console.log("DB FETCH DEBUG:", { 
+        questions: allQuestions?.length, qErr, 
+        subtopics: allSubtopics?.length, subErr, 
+        options: allOptions?.length, optErr 
+      });
+
       if (testMode === 'Full-Length Mock') {
         const examIdValue = selectedExamId;
 
@@ -182,10 +189,6 @@ export default function ExamPortal() {
         let finalSectionMap = {};
         let initialSectionTimes = {};
         const defaultSecDurationSecs = Math.round((testDurationMinutes * 60) / sectionsData.length);
-
-        const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
-        const { data: allSubtopics } = await supabase.from('subtopics').select('*');
-        const { data: allOptions } = await supabase.from('question_options').select('*');
 
         for (let i = 0; i < sectionsData.length; i++) {
           const sec = sectionsData[i];
@@ -215,12 +218,12 @@ export default function ExamPortal() {
 
           finalSectionMap[secId] = limitedQuestions.map(q => {
             const qId = q.question_id || q.id;
-            const rawOpts = (allOptions || []).filter(o => 
-              String(o.question_id) === String(qId) || 
-              String(o.qid) === String(qId) || 
-              String(o.questionId) === String(qId) ||
-              String(o.q_id) === String(qId)
-            );
+            
+            // Bulletproof multi-key option matching
+            const rawOpts = (allOptions || []).filter(o => {
+              const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
+              return optQId === String(qId).trim() || optQId === String(q.id).trim();
+            });
 
             return {
               ...q,
@@ -260,10 +263,6 @@ export default function ExamPortal() {
           { section_id: 'SPRINT_REA', section_name: 'Reasoning Ability', quota: reasoningQuota, timeSec: timePerCategory }
         ];
 
-        const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
-        const { data: allSubtopics } = await supabase.from('subtopics').select('*');
-        const { data: allOptions } = await supabase.from('question_options').select('*');
-
         if (!allQuestions || allQuestions.length === 0) {
           alert('No questions found in database.');
           setLoading(false);
@@ -288,12 +287,10 @@ export default function ExamPortal() {
           
           finalSectionMap[sec.section_id] = shuffled.map(q => {
             const qId = q.question_id || q.id;
-            const rawOpts = (allOptions || []).filter(o => 
-              String(o.question_id) === String(qId) || 
-              String(o.qid) === String(qId) || 
-              String(o.questionId) === String(qId) ||
-              String(o.q_id) === String(qId)
-            );
+            const rawOpts = (allOptions || []).filter(o => {
+              const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
+              return optQId === String(qId).trim() || optQId === String(q.id).trim();
+            });
 
             return {
               ...q,
@@ -329,17 +326,14 @@ export default function ExamPortal() {
           return;
         }
 
-        const { data: allOptions } = await supabase.from('question_options').select('*');
         const qIdKey = loadedQuestions[0].question_id !== undefined ? 'question_id' : 'id';
 
         const finalQuestions = loadedQuestions.map(q => {
           const qId = q[qIdKey];
-          const rawOpts = (allOptions || []).filter(o => 
-            String(o.question_id) === String(qId) || 
-            String(o.qid) === String(qId) || 
-            String(o.questionId) === String(qId) ||
-            String(o.q_id) === String(qId)
-          );
+          const rawOpts = (allOptions || []).filter(o => {
+            const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
+            return optQId === String(qId).trim() || optQId === String(q.id).trim();
+          });
 
           return {
             ...q,
