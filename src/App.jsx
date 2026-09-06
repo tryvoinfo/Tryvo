@@ -11,6 +11,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('exam'); // 'exam' | 'admin' | 'STUDY MATERIAL' | 'about'
   const [examPortalResetKey, setExamPortalResetKey] = useState(0);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showInstallGuide, setShowInstallGuide] = useState(false);
 
   // Automatically log visitor telemetry once when the app loads
   useEffect(() => {
@@ -71,7 +72,7 @@ export default function App() {
         setDeferredPrompt(null);
       }
     } else {
-      alert("PWA install prompt is not available yet. Use your browser's menu (Add to Home Screen / Install App).");
+      setShowInstallGuide(true);
     }
   };
 
@@ -175,7 +176,7 @@ export default function App() {
                     <strong className="text-white">Contribute Financially:</strong> If you are short on time but wish to help us keep the lights on, financial contributions toward our operating expenses are deeply appreciated. We hold ourselves to the highest standards of transparency—every single rupee is accounted for and completely auditable.
                   </li>
                   <li>
-                    <strong className="text-white">Support in Kind:</strong> Hesitant to contribute financially? We completely understand and respect that trust must be earned. You can still make a massive impact by donating books, providing study materials, offering a physical space where we could host free coaching, or contributing in any other creative way you see fit.
+                    <strong className="text-white">Support in Kind:</strong> Hesitant to contribute financially? We completely understand and respect that trust must be earned. You can still make a massive impact by donating books, providing study materials, offering a physical space where we could host free coaching, or contributing in any other creative way you fit.
                   </li>
                 </ul>
               </div>
@@ -190,6 +191,51 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* Install App Instruction Modal */}
+      {showInstallGuide && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-[oklch(0.23_0.045_265)] border border-white/15 rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-6 shadow-2xl text-[oklch(0.96_0.012_265)] font-mono">
+            <div className="flex justify-between items-center border-b border-white/10 pb-4">
+              <h3 className="text-lg font-black font-['Archivo_Black'] text-[oklch(0.94_0.21_118)]">INSTALL TRYVO</h3>
+              <button 
+                onClick={() => setShowInstallGuide(false)}
+                className="text-xs text-white bg-white/10 px-2.5 py-1 rounded-xl hover:bg-white/25 transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs font-sans text-[oklch(0.68_0.04_265)] leading-relaxed">
+              <p>
+                Your browser is managing the installation prompt automatically. You can install Tryvo manually in just two clicks:
+              </p>
+              
+              <div className="space-y-3 font-mono bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
+                <div className="flex items-start gap-3">
+                  <span className="w-5 h-5 shrink-0 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] rounded-full flex items-center justify-center font-bold text-[10px]">1</span>
+                  <p><strong className="text-white">Desktop (Chrome / Edge):</strong> Click the three vertical dots (<span className="text-[oklch(0.94_0.21_118)]">⋮</span>) in the top-right corner of your browser window.</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-5 h-5 shrink-0 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] rounded-full flex items-center justify-center font-bold text-[10px]">2</span>
+                  <p>Select <strong className="text-white">&quot;Install Tryvo...&quot;</strong> or <strong className="text-white">&quot;Save and share → Install page as app&quot;</strong>.</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-5 h-5 shrink-0 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] rounded-full flex items-center justify-center font-bold text-[10px]">📱</span>
+                  <p><strong className="text-white">Mobile:</strong> Tap your browser menu and choose <strong className="text-white">&quot;Add to Home Screen&quot;</strong>.</p>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowInstallGuide(false)}
+              className="w-full py-3 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] text-xs font-bold uppercase tracking-widest rounded-xl transition cursor-pointer hover:brightness-110 shadow"
+            >
+              Got It
+            </button>
+          </div>
+        </div>
+      )}
 
       <footer className="relative z-10 bg-[oklch(0.16_0.03_265)] border-t border-white/10 px-6 sm:px-12 py-6 text-center font-mono text-xs text-[oklch(0.68_0.04_265)] flex flex-col sm:flex-row justify-between items-center gap-4">
         <div>© 2026 Tryvo Labs. All rights reserved.</div>
