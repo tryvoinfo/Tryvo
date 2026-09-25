@@ -81,11 +81,12 @@ export default function App() {
       const currentUser = session?.user || null;
 
       if (currentUser) {
+        // Use .maybeSingle() instead of .single() to avoid errors if the email isn't found
         const { data: whitelist } = await supabase
           .from('allowed_users')
           .select('email')
           .eq('email', currentUser.email)
-          .single();
+          .maybeSingle();
 
         if (!whitelist) {
           await supabase.auth.signOut();
