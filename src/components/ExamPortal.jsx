@@ -10,6 +10,20 @@ const shuffleArray = (array) => {
   return shuffled;
 };
 
+// Text cleaner to remove Excel/UTF-8 encoding artifacts (like â□□, â€–, etc.)
+const cleanText = (text) => {
+  if (!text) return '';
+  return String(text)
+    .replace(/â€“/g, '–')
+    .replace(/â€”/g, '—')
+    .replace(/â□□/g, ', ')
+    .replace(/â€™/g, "'")
+    .replace(/â€œ/g, '"')
+    .replace(/â€/g, '"')
+    .replace(/â€¦/g, '…')
+    .replace(/â□□/g, ' ');
+};
+
 export default function ExamPortal() {
   const [stage, setStage] = useState('config'); // 'config' | 'exam' | 'result' | 'solutions' | 'swot' | 'construction'
   const [exams, setExams] = useState([]);
@@ -19,7 +33,11 @@ export default function ExamPortal() {
   const [selectedExamId, setSelectedExamId] = useState('');
   const [testMode, setTestMode] = useState('Full-Length Mock'); // 'Full-Length Mock' | 'Time-Based Practice' | 'Topic-Based'
   const [mockTimingMode, setMockTimingMode] = useState('liberal'); // 'liberal' | 'strict'
+  
+  // Cascading Topic Drill State
+  const [selectedMainCategory, setSelectedMainCategory] = useState('');
   const [selectedSubtopicId, setSelectedSubtopicId] = useState('');
+
   const [practiceMinutes, setPracticeMinutes] = useState(15);
   const [loading, setLoading] = useState(false);
 
@@ -58,14 +76,14 @@ export default function ExamPortal() {
     };
   }, []);
 
-  // Intercept browser back button during an active exam to prevent accidental exit
+  // Browser navigation guard & accidental click protection during active exam session
   useEffect(() => {
     if (stage !== 'exam') return;
 
     window.history.pushState(null, '', window.location.href);
 
     const handlePopState = (e) => {
-      const confirmLeave = window.confirm("Warning: Leaving this page will disrupt your live test session. Are you sure you want to exit?");
+      const confirmLeave = window.confirm("⚠️ Active Exam Warning: You cannot leave this page until you submit your test. Are you sure you want to terminate your session?");
       if (confirmLeave) {
         setStage('config');
       } else {
@@ -73,9 +91,35 @@ export default function ExamPortal() {
       }
     };
 
+    const handleBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = 'Your exam is currently in progress. Leaving will discard your session progress.';
+      return e.returnValue;
+    };
+
+    const handleDocumentClick = (e) => {
+      const targetLink = e.target.closest('a, button');
+      if (!targetLink) return;
+
+      // Allow interaction within the active exam container HUD and controllers
+      if (targetLink.closest('.exam-active-container') || targetLink.classList.contains('exam-nav-action')) {
+        return;
+      }
+
+      // Intercept accidental clicks on headers, external tabs, or menu links
+      e.preventDefault();
+      e.stopPropagation();
+      window.alert("🔒 Exam Lock Active: You cannot switch tabs or leave during an active exam session. Please submit your test when finished.");
+    };
+
     window.addEventListener('popstate', handlePopState);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    document.addEventListener('click', handleDocumentClick, true);
+
     return () => {
       window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      document.removeEventListener('click', handleDocumentClick, true);
     };
   }, [stage]);
 
@@ -102,20 +146,42 @@ export default function ExamPortal() {
     return sortedQuestions;
   };
 
-  // Load metadata and pick a random Daily Dilemma from the dedicated DB table, strictly limited to 4 options
+  // Load metadata and filter exams based on user allocations
   useEffect(() => {
     async function loadMetaAndDilemma() {
       try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const userSessionStr = localStorage.getItem('tryvo_user_session');
+        const parsedUser = userSessionStr ? JSON.parse(userSessionStr) : null;
+        const userEmail = session?.user?.email || parsedUser?.email;
+
         const { data: examsData } = await supabase.from('exams').select('*');
         const { data: subtopicsData } = await supabase.from('subtopics').select('*');
         
         if (examsData && examsData.length > 0) {
-          setExams(examsData);
-          setSelectedExamId(examsData[0].exam_id || examsData[0].id);
+          if (userEmail) {
+            const { data: allocations } = await supabase
+              .from('user_exam_allocations')
+              .select('exam_id')
+              .eq('email', userEmail);
+
+            const allocatedIds = allocations ? allocations.map(a => String(a.exam_id)) : [];
+            const filteredExams = examsData.filter(ex => allocatedIds.includes(String(ex.exam_id || ex.id)));
+            
+            setExams(filteredExams);
+            if (filteredExams.length > 0) {
+              setSelectedExamId(filteredExams[0].exam_id || filteredExams[0].id);
+            }
+          } else {
+            setExams([]);
+          }
         }
+
         if (subtopicsData && subtopicsData.length > 0) {
           setSubtopics(subtopicsData);
-          setSelectedSubtopicId(subtopicsData[0].subtopic_id || subtopicsData[0].id);
+          const firstSub = subtopicsData[0];
+          setSelectedMainCategory(firstSub.category || firstSub.section_name || 'Numerical Ability');
+          setSelectedSubtopicId(firstSub.subtopic_id || firstSub.id);
         }
 
         const { data: dilemmas } = await supabase.from('daily_dilemmas').select('*');
@@ -159,16 +225,9 @@ export default function ExamPortal() {
         testDurationMinutes = activeExam.duration_minutes || 60;
       }
 
-      // Fetch all questions, subtopics, and options globally with debug logs
-      const { data: allQuestions, error: qErr } = await supabase.from('questions').select('*, passages(*)');
-      const { data: allSubtopics, error: subErr } = await supabase.from('subtopics').select('*');
-      const { data: allOptions, error: optErr } = await supabase.from('question_options').select('*').range(0, 9999).limit(5000);
-
-      console.log("DB FETCH DEBUG:", { 
-        questions: allQuestions?.length, qErr, 
-        subtopics: allSubtopics?.length, subErr, 
-        options: allOptions?.length, optErr 
-      });
+      const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
+      const { data: allSubtopics } = await supabase.from('subtopics').select('*');
+      const { data: allOptions } = await supabase.from('question_options').select('*').range(0, 9999).limit(5000);
 
       if (testMode === 'Full-Length Mock') {
         const examIdValue = selectedExamId;
@@ -194,11 +253,12 @@ export default function ExamPortal() {
           const sec = sectionsData[i];
           const secId = sec.section_id || sec.id;
           const quota = sec.no_of_questions || 35;
+          const secNameLower = (sec.section_name || '').toLowerCase();
 
           initialSectionTimes[secId] = sec.duration_minutes ? sec.duration_minutes * 60 : defaultSecDurationSecs;
 
-          const matchingSubIds = allSubtopics
-            ?.filter(s => s.section_id === secId || s.subtopic_name?.toLowerCase().includes(sec.section_name?.toLowerCase().split(' ')[0]))
+          let matchingSubIds = allSubtopics
+            ?.filter(s => s.section_id === secId || s.section_id?.toLowerCase() === secId.toLowerCase())
             ?.map(s => s.subtopic_id || s.id) || [];
 
           let qData = [];
@@ -206,10 +266,21 @@ export default function ExamPortal() {
             qData = allQuestions.filter(q => matchingSubIds.includes(q.subtopic_id));
           }
 
-          if ((!qData || qData.length === 0) && allQuestions && allQuestions.length > 0) {
-            const chunkSize = Math.ceil(allQuestions.length / sectionsData.length);
-            const startIndex = i * chunkSize;
-            qData = allQuestions.slice(startIndex, startIndex + quota);
+          if ((!qData || qData.length === 0) && allQuestions) {
+            qData = allQuestions.filter(q => {
+              const subObj = allSubtopics?.find(s => (s.subtopic_id || s.id) === q.subtopic_id);
+              const subName = (subObj?.subtopic_name || '').toLowerCase();
+              
+              if (secNameLower.includes('english')) {
+                return subName.includes('cloze') || subName.includes('reading') || subName.includes('error') || subName.includes('vocab') || subName.includes('filler');
+              } else if (secNameLower.includes('numerical') || secNameLower.includes('quant')) {
+                return subName.includes('approxi') || subName.includes('average') || subName.includes('series') || subName.includes('profit') || subName.includes('ratio') || subName.includes('simplif');
+              } else if (secNameLower.includes('reasoning')) {
+                return subName.includes('puzzle') || subName.includes('seating') || subName.includes('syllogism') || subName.includes('chart') || subName.includes('graph') || subName.includes('blood');
+              } else {
+                return false;
+              }
+            });
           }
 
           const shuffledQData = shuffleArray(qData || []);
@@ -218,8 +289,6 @@ export default function ExamPortal() {
 
           finalSectionMap[secId] = limitedQuestions.map(q => {
             const qId = q.question_id || q.id;
-            
-            // Bulletproof multi-key option matching
             const rawOpts = (allOptions || []).filter(o => {
               const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
               return optQId === String(qId).trim() || optQId === String(q.id).trim();
@@ -274,13 +343,20 @@ export default function ExamPortal() {
 
         sprintSections.forEach(sec => {
           initialSectionTimes[sec.section_id] = sec.timeSec;
-          const matchingSubs = allSubtopics?.filter(s => s.subtopic_name?.toLowerCase().includes(sec.section_name.toLowerCase().split(' ')[0]))?.map(s => s.subtopic_id || s.id) || [];
+          const targetKey = sec.section_name.toLowerCase().split(' ')[0];
+
+          // Flexible match: checks subtopic name, category, or section name. If empty, takes general pool slice as fallback.
+          let matchingSubs = allSubtopics?.filter(s => {
+            const name = (s.subtopic_name || s.name || '').toLowerCase();
+            const cat = (s.category || s.section_name || '').toLowerCase();
+            return name.includes(targetKey) || cat.includes(targetKey);
+          })?.map(s => s.subtopic_id || s.id) || [];
           
           let secQuestions = allQuestions.filter(q => matchingSubs.includes(q.subtopic_id));
-          if (secQuestions.length === 0) {
-            const chunk = Math.ceil(allQuestions.length / 3);
-            const index = sprintSections.indexOf(sec);
-            secQuestions = allQuestions.slice(index * chunk, (index + 1) * chunk);
+          
+          // Fallback if specific category filter returns nothing so practice mode never locks up empty
+          if (secQuestions.length === 0 && allQuestions.length > 0) {
+            secQuestions = allQuestions;
           }
 
           const shuffled = groupPassageQuestions(shuffleArray(secQuestions)).slice(0, sec.quota);
@@ -495,7 +571,7 @@ export default function ExamPortal() {
     }
   };
 
-  const handleSubmitTest = () => {
+  const handleSubmitTest = async () => {
     let score = 0;
     let attempted = 0;
     let correctCount = 0;
@@ -521,15 +597,42 @@ export default function ExamPortal() {
 
     const accuracy = attempted > 0 ? ((correctCount / attempted) * 100).toFixed(2) : 0;
 
-    setAttemptResult({
+    const resultData = {
       totalQuestions: totalQCount,
       attempted,
       correctCount,
-      score: score.toFixed(2),
+      score: Number(score.toFixed(2)),
       accuracy
-    });
+    };
 
+    setAttemptResult(resultData);
     setStage('result');
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userSessionStr = localStorage.getItem('tryvo_user_session');
+      const parsedUser = userSessionStr ? JSON.parse(userSessionStr) : null;
+      const userId = session?.user?.id || parsedUser?.id;
+
+      if (userId) {
+        const activeExamObj = exams.find((e) => (e.exam_id || e.id) === selectedExamId);
+        const examTitleName = testMode === 'Full-Length Mock' 
+          ? (activeExamObj?.exam_name || activeExamObj?.name || 'Full Mock Exam') 
+          : `${testMode} Session`;
+
+        await supabase.from('exam_submissions').insert([
+          {
+            user_id: userId,
+            exam_title: examTitleName,
+            score: Number(score.toFixed(2)),
+            total_marks: totalQCount,
+            category: testMode
+          }
+        ]);
+      }
+    } catch (err) {
+      console.error("Error recording exam submission to analytics:", err);
+    }
   };
 
   const formatTime = (seconds) => {
@@ -585,7 +688,7 @@ export default function ExamPortal() {
     return (
       <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col items-center justify-center p-8 text-center space-y-4 font-sans">
         <h1 className="text-3xl sm:text-5xl font-extrabold font-['Archivo_Black'] text-[oklch(0.94_0.21_118)]">
-          {constructionTitle} Under Construction
+          {cleanText(constructionTitle)} Under Construction
         </h1>
         <p className="font-mono text-sm text-[oklch(0.68_0.04_265)] uppercase tracking-wider">
           We are building something awesome. Check back soon!
@@ -602,6 +705,30 @@ export default function ExamPortal() {
 
   // CONFIG STAGE
   if (stage === 'config') {
+    const getSubtopicCategory = (sub) => {
+      if (sub.category) return sub.category;
+      if (sub.section_name) return sub.section_name;
+      
+      const name = (sub.subtopic_name || sub.name || '').toLowerCase();
+      if (name.includes('simplification') || name.includes('arithmetic') || name.includes('series') || name.includes('data interpretation') || name.includes('approximation') || name.includes('quadratic')) {
+        return 'Numerical Ability';
+      } else if (name.includes('cloze') || name.includes('error') || name.includes('filler') || name.includes('reading') || name.includes('vocab') || name.includes('match')) {
+        return 'English Language';
+      } else if (name.includes('puzzle') || name.includes('seating') || name.includes('syllogism') || name.includes('blood') || name.includes('direction')) {
+        return 'Reasoning Ability';
+      }
+      return 'General Awareness / Other';
+    };
+    const mainCategories = [...new Set(subtopics.map(sub => getSubtopicCategory(sub)))];
+    
+    if (!selectedMainCategory && mainCategories.length > 0) {
+      setSelectedMainCategory(mainCategories[0]);
+    }
+
+    const filteredSubtopics = subtopics.filter(sub => {
+      return getSubtopicCategory(sub) === selectedMainCategory;
+    });
+
     return (
       <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col justify-center px-6 lg:px-20 py-12 relative overflow-hidden font-sans">
         
@@ -672,7 +799,7 @@ export default function ExamPortal() {
 
               <div className="space-y-4">
                 <p className="text-sm sm:text-base font-semibold text-[oklch(0.96_0.012_265)] min-h-[48px]">
-                  {dilemmaQuestion ? dilemmaQuestion.question_text : 'Loading dilemma from separate table...'}
+                  {dilemmaQuestion ? cleanText(dilemmaQuestion.question_text) : 'Loading dilemma from separate table...'}
                 </p>
 
                 <div className="space-y-2.5 font-mono text-xs">
@@ -699,7 +826,7 @@ export default function ExamPortal() {
                           onClick={() => !dilemmaSubmitted && setDilemmaSelectedIndex(oIdx)}
                           className={`p-3 rounded-xl border transition cursor-pointer flex justify-between items-center ${borderStyle}`}
                         >
-                          <span>{String.fromCharCode(65 + oIdx)} — {opt.option_text}</span>
+                          <span>{String.fromCharCode(65 + oIdx)} — {cleanText(opt.option_text)}</span>
                           {dilemmaSubmitted && isCorrect && <span className="text-emerald-400 font-bold">✓ CORRECT</span>}
                           {!dilemmaSubmitted && isSelected && <span className="text-[oklch(0.94_0.21_118)] font-bold">SELECTED</span>}
                         </div>
@@ -754,11 +881,11 @@ export default function ExamPortal() {
                 {exams.length > 0 ? (
                   exams.map((ex) => (
                     <option key={ex.exam_id || ex.id} value={ex.exam_id || ex.id}>
-                      {ex.exam_name || ex.name}
+                      {cleanText(ex.exam_name || ex.name)}
                     </option>
                   ))
                 ) : (
-                  <option value="">No exam blueprints found</option>
+                  <option value="">No exams allocated to your account</option>
                 )}
               </select>
             </div>
@@ -787,7 +914,6 @@ export default function ExamPortal() {
               </div>
             </div>
 
-            {/* CONDITIONAL SETTINGS BASED ON EXECUTION MODE */}
             {testMode === 'Full-Length Mock' && (
               <div>
                 <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Timer Protocol</label>
@@ -843,33 +969,59 @@ export default function ExamPortal() {
             )}
 
             {testMode === 'Topic-Based' && (
-              <div>
-                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Topic / Subtopic</label>
-                <select
-                  className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
-                  value={selectedSubtopicId}
-                  onChange={(e) => setSelectedSubtopicId(e.target.value)}
-                >
-                  {subtopics.length > 0 ? (
-                    subtopics.map((sub) => (
-                      <option key={sub.subtopic_id || sub.id} value={sub.subtopic_id || sub.id}>
-                        {sub.subtopic_name || sub.name}
-                      </option>
-                    ))
-                  ) : (
-                    <option value="">No subtopics available in database</option>
-                  )}
-                </select>
+              <div className="space-y-4">
+                <div>
+                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Main Category</label>
+                  <select
+                    className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                    value={selectedMainCategory}
+                    onChange={(e) => {
+                      const newCat = e.target.value;
+                      setSelectedMainCategory(newCat);
+                      const matchingSubs = subtopics.filter(sub => (sub.category || sub.section_name || 'General') === newCat);
+                      if (matchingSubs.length > 0) {
+                        setSelectedSubtopicId(matchingSubs[0].subtopic_id || matchingSubs[0].id);
+                      }
+                    }}
+                  >
+                    {mainCategories.length > 0 ? (
+                      mainCategories.map((cat, idx) => (
+                        <option key={idx} value={cat}>{cleanText(cat)}</option>
+                      ))
+                    ) : (
+                      <option value="">No categories found</option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Subtopic</label>
+                  <select
+                    className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                    value={selectedSubtopicId}
+                    onChange={(e) => setSelectedSubtopicId(e.target.value)}
+                  >
+                    {filteredSubtopics.length > 0 ? (
+                      filteredSubtopics.map((sub) => (
+                        <option key={sub.subtopic_id || sub.id} value={sub.subtopic_id || sub.id}>
+                          {cleanText(sub.subtopic_name || sub.name)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No subtopics available</option>
+                    )}
+                  </select>
+                </div>
               </div>
             )}
           </div>
 
           <button
             onClick={startExam}
-            disabled={loading}
-            className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer"
+            disabled={loading || exams.length === 0}
+            className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer disabled:opacity-50"
           >
-            {loading ? 'BUILDING QUESTION BANK...' : 'INITIALIZE MOCK SESSION →'}
+            {loading ? 'BUILDING QUESTION BANK...' : exams.length === 0 ? 'NO EXAMS ALLOCATED TO YOU' : 'INITIALIZE MOCK SESSION →'}
           </button>
         </div>
 
@@ -877,7 +1029,7 @@ export default function ExamPortal() {
     );
   }
 
-  // EXAM STAGE HUD
+  // EXAM STAGE HUD (Secured with .exam-active-container class)
   if (stage === 'exam') {
     const currentQList = getCurrentActiveQuestions();
     const currentQ = currentQList[currentIndex];
@@ -885,8 +1037,10 @@ export default function ExamPortal() {
     const activeSecId = sections[activeSectionIndex]?.section_id || sections[activeSectionIndex]?.id;
     const activeSecTimeLeft = sectionTimeLefts[activeSecId];
 
+    const rawPassage = currentQ?.passages?.passage_text || currentQ?.passage_text;
+
     return (
-      <div className="flex flex-col flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] font-sans select-none relative min-h-screen">
+      <div className="flex flex-col flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] font-sans select-none relative min-h-screen exam-active-container">
         <header className="bg-[oklch(0.23_0.045_265)] text-white px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between border-b border-white/10 gap-4">
           <div>
             <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold block">Live Execution HUD</span>
@@ -907,14 +1061,14 @@ export default function ExamPortal() {
             
             <button
               onClick={() => setIsPaletteOpen(!isPaletteOpen)}
-              className="lg:hidden bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold px-3 py-2 rounded-xl"
+              className="lg:hidden bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold px-3 py-2 rounded-xl exam-nav-action"
             >
               {isPaletteOpen ? 'Close Grid' : 'Grid'}
             </button>
 
             <button
               onClick={() => setShowSubmitConfirm(true)}
-              className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold uppercase tracking-[0.15em] px-4 py-2.5 rounded-xl shadow-lg transition cursor-pointer"
+              className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold uppercase tracking-[0.15em] px-4 py-2.5 rounded-xl shadow-lg transition cursor-pointer exam-nav-action"
             >
               Submit Test
             </button>
@@ -931,7 +1085,7 @@ export default function ExamPortal() {
               <button
                 key={secId}
                 onClick={() => handleSelectSection(idx)}
-                className={`px-4 py-2 rounded-xl font-bold tracking-wider transition shrink-0 cursor-pointer ${
+                className={`px-4 py-2 rounded-xl font-bold tracking-wider transition shrink-0 cursor-pointer exam-nav-action ${
                   isCurrent
                     ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
                     : mockTimingMode === 'strict'
@@ -939,7 +1093,7 @@ export default function ExamPortal() {
                     : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] hover:text-[oklch(0.96_0.012_265)] border border-white/5'
                 }`}
               >
-                {sec.section_name.toUpperCase()} ({sectionQuestionsMap[secId]?.length || 0}) {mockTimingMode === 'strict' && !isCurrent && '🔒'}
+                {cleanText(sec.section_name).toUpperCase()} ({sectionQuestionsMap[secId]?.length || 0}) {mockTimingMode === 'strict' && !isCurrent && '🔒'}
               </button>
             );
           })}
@@ -949,68 +1103,83 @@ export default function ExamPortal() {
           <main className="flex-1 flex flex-col bg-[oklch(0.16_0.03_265)] border-r border-white/10 overflow-hidden w-full">
             <div className="px-6 py-3.5 bg-[oklch(0.23_0.045_265)]/30 border-b border-white/10 flex items-center justify-between font-mono text-xs">
               <span className="font-bold text-[oklch(0.96_0.012_265)] tracking-wider">
-                {sections[activeSectionIndex]?.section_name.toUpperCase()} &gt; Q.{currentIndex + 1}
+                {cleanText(sections[activeSectionIndex]?.section_name).toUpperCase()} {currentQ ? `> Q.${currentIndex + 1}` : ''}
               </span>
               <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Difficulty: {currentQ?.difficulty_level || 'Moderate'}</span>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 sm:p-10 space-y-6">
-              {(currentQ?.passages?.passage_text || currentQ?.passage_text) && (
-                <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-2xl p-6 text-sm text-[oklch(0.96_0.012_265)] space-y-2">
-                  <h4 className="font-mono text-xs uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] font-bold border-b border-white/10 pb-2">Reading Context / Passage</h4>
-                  <p className="leading-relaxed whitespace-pre-line font-sans">
-                    {currentQ?.passages?.passage_text || currentQ?.passage_text}
-                  </p>
+              {!currentQ ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-12 text-center font-mono text-xs my-auto">
+                  <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-6 rounded-2xl space-y-3 max-w-md mx-auto">
+                    <p className="text-[oklch(0.96_0.012_265)] font-bold uppercase tracking-wider">No Questions Deployed</p>
+                    <p className="text-[oklch(0.68_0.04_265)] leading-relaxed">
+                      There are no active questions loaded for <span className="text-[oklch(0.94_0.21_118)]">{cleanText(sections[activeSectionIndex]?.section_name)}</span>. Please use the Bulk Uploader to ingest a dataset for this module.
+                    </p>
+                  </div>
                 </div>
-              )}
-
-              {currentQ?.image_url && (
-                <div className="flex justify-center bg-[oklch(0.23_0.045_265)] p-4 rounded-2xl border border-white/10">
-                  <img src={currentQ.image_url} alt="Question Graphic" className="max-h-64 object-contain rounded" />
-                </div>
-              )}
-
-              <div className="text-base sm:text-lg font-medium text-[oklch(0.96_0.012_265)] leading-relaxed font-sans">
-                {currentQ?.question_text}
-              </div>
-
-              <div className="space-y-3 pt-2">
-                {currentQ?.question_options?.map((opt, oIndex) => {
-                  const optId = opt.option_id || opt.id;
-                  const isChecked = userAnswers[currentQ.question_id] === optId;
-                  return (
-                    <div
-                      key={optId}
-                      onClick={() => handleOptionSelect(optId)}
-                      className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
-                        isChecked
-                          ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.96_0.012_265)] shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]'
-                          : 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-[oklch(0.96_0.012_265)]'
-                      }`}
-                    >
-                      <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
-                        isChecked ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : 'bg-[oklch(0.16_0.03_265)] border-white/20 text-[oklch(0.96_0.012_265)]'
-                      }`}>
-                        {String.fromCharCode(65 + oIndex)}
-                      </span>
-                      <span className="text-sm font-medium font-sans">{opt.option_text}</span>
+              ) : (
+                <>
+                  {rawPassage && (
+                    <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-2xl p-6 text-sm text-[oklch(0.96_0.012_265)] space-y-2">
+                      <h4 className="font-mono text-xs uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] font-bold border-b border-white/10 pb-2">Reading Context / Passage</h4>
+                      <p className="leading-relaxed whitespace-pre-line font-sans">
+                        {cleanText(rawPassage)}
+                      </p>
                     </div>
-                  );
-                })}
-              </div>
+                  )}
+
+                  {currentQ?.image_url && (
+                    <div className="flex justify-center bg-[oklch(0.23_0.045_265)] p-4 rounded-2xl border border-white/10">
+                      <img src={currentQ.image_url} alt="Question Graphic" className="max-h-64 object-contain rounded" />
+                    </div>
+                  )}
+
+                  <div className="text-base sm:text-lg font-medium text-[oklch(0.96_0.012_265)] leading-relaxed font-sans">
+                    {cleanText(currentQ?.question_text)}
+                  </div>
+
+                  <div className="space-y-3 pt-2">
+                    {currentQ?.question_options?.map((opt, oIndex) => {
+                      const optId = opt.option_id || opt.id;
+                      const isChecked = userAnswers[currentQ.question_id] === optId;
+                      return (
+                        <div
+                          key={optId}
+                          onClick={() => handleOptionSelect(optId)}
+                          className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
+                            isChecked
+                              ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.96_0.012_265)] shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]'
+                              : 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-[oklch(0.96_0.012_265)]'
+                          }`}
+                        >
+                          <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
+                            isChecked ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : 'bg-[oklch(0.16_0.03_265)] border-white/20 text-[oklch(0.96_0.012_265)]'
+                          }`}>
+                            {String.fromCharCode(65 + oIndex)}
+                          </span>
+                          <span className="text-sm font-medium font-sans">{cleanText(opt.option_text)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="px-6 py-4 bg-[oklch(0.23_0.045_265)]/40 border-t border-white/10 flex flex-wrap items-center justify-between gap-4 font-mono">
               <div className="flex gap-3">
                 <button
                   onClick={handleMarkForReviewAndNext}
-                  className="px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold uppercase tracking-wider rounded-xl border border-amber-500/30 transition cursor-pointer"
+                  disabled={!currentQ}
+                  className="px-4 py-2.5 bg-amber-500/25 hover:bg-amber-500/35 text-amber-300 text-xs font-bold uppercase tracking-wider rounded-xl border border-amber-500/30 transition cursor-pointer disabled:opacity-40 exam-nav-action"
                 >
                   Mark & Next
                 </button>
                 <button
                   onClick={handleClearResponse}
-                  className="px-4 py-2.5 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.68_0.04_265)] text-xs font-bold uppercase tracking-wider rounded-xl border border-white/10 transition cursor-pointer"
+                  disabled={!currentQ}
+                  className="px-4 py-2.5 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.68_0.04_265)] text-xs font-bold uppercase tracking-wider rounded-xl border border-white/10 transition cursor-pointer disabled:opacity-40 exam-nav-action"
                 >
                   Clear
                 </button>
@@ -1018,7 +1187,8 @@ export default function ExamPortal() {
 
               <button
                 onClick={handleSaveAndNext}
-                className="px-6 py-2.5 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] text-xs font-extrabold uppercase tracking-[0.15em] rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.2)] transition cursor-pointer"
+                disabled={!currentQ}
+                className="px-6 py-2.5 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] text-xs font-extrabold uppercase tracking-[0.15em] rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.2)] transition cursor-pointer disabled:opacity-40 exam-nav-action"
               >
                 Save & Next →
               </button>
@@ -1030,7 +1200,7 @@ export default function ExamPortal() {
             <div className="p-5 border-b border-white/10 bg-[oklch(0.16_0.03_265)]/50">
               <div className="flex justify-between items-center mb-3">
                 <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)]">HUD Palette Summary</h5>
-                <button onClick={() => setIsPaletteOpen(false)} className="lg:hidden text-xs text-white font-mono bg-white/10 px-2 py-1 rounded">✕</button>
+                <button onClick={() => setIsPaletteOpen(false)} className="lg:hidden text-xs text-white font-mono bg-white/10 px-2 py-1 rounded exam-nav-action">✕</button>
               </div>
               
               <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
@@ -1057,19 +1227,23 @@ export default function ExamPortal() {
               <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-3">
                 Question Navigator
               </h5>
-              <div className="grid grid-cols-5 gap-2">
-                {currentQList.map((q, idx) => (
-                  <button
-                    key={q.question_id}
-                    onClick={() => handleSelectQuestion(idx)}
-                    className={`h-11 rounded-xl font-mono font-bold text-xs shadow transition cursor-pointer ${getQuestionPaletteStyle(q.question_id)} ${
-                      currentIndex === idx ? 'ring-2 ring-[oklch(0.94_0.21_118)] ring-offset-2 ring-offset-[oklch(0.23_0.045_265)]' : ''
-                    }`}
-                  >
-                    {idx + 1}
-                  </button>
-                ))}
-              </div>
+              {currentQList.length === 0 ? (
+                <p className="text-xs font-mono text-[oklch(0.68_0.04_265)] italic">No items in this module.</p>
+              ) : (
+                <div className="grid grid-cols-5 gap-2">
+                  {currentQList.map((q, idx) => (
+                    <button
+                      key={q.question_id}
+                      onClick={() => handleSelectQuestion(idx)}
+                      className={`h-11 rounded-xl font-mono font-bold text-xs shadow transition cursor-pointer exam-nav-action ${getQuestionPaletteStyle(q.question_id)} ${
+                        currentIndex === idx ? 'ring-2 ring-[oklch(0.94_0.21_118)] ring-offset-2 ring-offset-[oklch(0.23_0.045_265)]' : ''
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </aside>
         </div>
@@ -1186,7 +1360,7 @@ export default function ExamPortal() {
                   <div key={idx} className="bg-[oklch(0.16_0.03_265)] border border-white/5 rounded-2xl p-5 space-y-3">
                     <div className="flex flex-wrap justify-between items-center gap-2">
                       <div className="flex items-center gap-3">
-                        <span className="font-bold text-sm text-[oklch(0.96_0.012_265)]">{stat.name.toUpperCase()}</span>
+                        <span className="font-bold text-sm text-[oklch(0.96_0.012_265)]">{cleanText(stat.name).toUpperCase()}</span>
                         {isWeak ? (
                           <span className="bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest">
                             ⚠️ WEAK ZONE
@@ -1284,7 +1458,7 @@ export default function ExamPortal() {
                     </span>
                   </div>
 
-                  <p className="text-base font-medium font-sans">{q.question_text}</p>
+                  <p className="text-base font-medium font-sans">{cleanText(q.question_text)}</p>
 
                   <div className="space-y-2 font-mono text-xs">
                     {q.question_options?.map((opt, oIndex) => {
@@ -1298,7 +1472,7 @@ export default function ExamPortal() {
 
                       return (
                         <div key={optId} className={`p-3.5 rounded-2xl border flex items-center justify-between ${badgeStyle}`}>
-                          <span>({String.fromCharCode(65 + oIndex)}) {opt.option_text}</span>
+                          <span>({String.fromCharCode(65 + oIndex)}) {cleanText(opt.option_text)}</span>
                           <span className="font-bold tracking-wider">
                             {isStudentChoice && '[YOUR PICK] '}
                             {isRightChoice && '[CORRECT]'}
@@ -1311,7 +1485,7 @@ export default function ExamPortal() {
                   {q.solution_explanation && (
                     <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/10 font-mono text-xs space-y-1">
                       <span className="text-[oklch(0.94_0.21_118)] font-bold uppercase tracking-wider block">Solution Breakdown:</span>
-                      <p className="font-sans text-[oklch(0.68_0.04_265)] leading-relaxed">{q.solution_explanation}</p>
+                      <p className="font-sans text-[oklch(0.68_0.04_265)] leading-relaxed">{cleanText(q.solution_explanation)}</p>
                     </div>
                   )}
                 </div>
@@ -1324,6 +1498,42 @@ export default function ExamPortal() {
   }
 
   // SWOT STAGE
+  let sectionStats = sections.map((sec) => {
+    const secId = sec.section_id || sec.id;
+    const qList = sectionQuestionsMap[secId] || [];
+    let correct = 0;
+    let incorrect = 0;
+    let unattempted = 0;
+    let totalTime = 0;
+
+    qList.forEach((q) => {
+      const studentAns = userAnswers[q.question_id];
+      const correctOpt = q.question_options?.find((o) => o.is_correct);
+      const correctOptId = correctOpt?.option_id || correctOpt?.id;
+      totalTime += questionTimers[q.question_id] || 0;
+
+      if (!studentAns) {
+        unattempted++;
+      } else if (studentAns === correctOptId) {
+        correct++;
+      } else {
+        incorrect++;
+      }
+    });
+
+    const attempted = correct + incorrect;
+    const accuracy = attempted > 0 ? Math.round((correct / attempted) * 100) : 0;
+    return {
+      name: sec.section_name,
+      total: qList.length,
+      correct,
+      incorrect,
+      unattempted,
+      accuracy,
+      totalTime
+    };
+  });
+
   if (stage === 'swot') {
     return (
       <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center font-sans">

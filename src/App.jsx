@@ -2,50 +2,148 @@ import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import ExamPortal from './components/ExamPortal';
 import BulkExcelUploader from './components/BulkExcelUploader';
+import AdminCurriculumBuilder from './components/AdminCurriculumBuilder';
+import AdminExamCreator from './components/AdminExamCreator';
+import AdminUserAllocator from './components/AdminUserAllocator';
+import UserAnalytics from './components/UserAnalytics';
+import ChangePasswordModal from './components/ChangePasswordModal';
 
 const supabaseUrl = 'https://wbcdiewohpngqbeqrfmb.supabase.co';
 const supabaseAnonKey = 'sb_publishable_d21wos13j9x7K-w1h8vsvw_0gPm_jlY';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+function AdminPortalWrapper() {
+  const [adminTab, setAdminTab] = useState('organogram');
+
+  return (
+    <div className="flex-1 flex flex-col bg-[oklch(0.16_0.03_265)]">
+      <div className="bg-[oklch(0.23_0.045_265)] border-b border-white/10 px-8 py-4 flex gap-4 font-mono text-xs flex-wrap">
+        <button
+          onClick={() => setAdminTab('organogram')}
+          className={`px-5 py-2.5 rounded-xl font-bold tracking-wider transition cursor-pointer ${
+            adminTab === 'organogram' ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : 'text-white'
+          }`}
+        >
+          🌳 Organogram Studio
+        </button>
+        <button
+          onClick={() => setAdminTab('excel')}
+          className={`px-5 py-2.5 rounded-xl font-bold tracking-wider transition cursor-pointer ${
+            adminTab === 'excel' ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : 'text-white'
+          }`}
+        >
+          📊 Bulk Excel Uploader
+        </button>
+        <button
+          onClick={() => setAdminTab('exams')}
+          className={`px-5 py-2.5 rounded-xl font-bold tracking-wider transition cursor-pointer ${
+            adminTab === 'exams' ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : 'text-white'
+          }`}
+        >
+          📝 Create New Exam
+        </button>
+        <button
+          onClick={() => setAdminTab('access')}
+          className={`px-5 py-2.5 rounded-xl font-bold tracking-wider transition cursor-pointer ${
+            adminTab === 'access' ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : 'text-white'
+          }`}
+        >
+          🛡️ Access Control & Exams
+        </button>
+      </div>
+
+      <div className="flex-1 flex flex-col">
+        {adminTab === 'organogram' && <AdminCurriculumBuilder />}
+        {adminTab === 'excel' && <BulkExcelUploader />}
+        {adminTab === 'exams' && <AdminExamCreator />}
+        {adminTab === 'access' && <AdminUserAllocator />}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [currentView, setCurrentView] = useState('exam'); // 'exam' | 'admin' | 'STUDY MATERIAL' | 'about'
+  const [user, setUser] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [currentView, setCurrentView] = useState('exam');
   const [examPortalResetKey, setExamPortalResetKey] = useState(0);
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
 
-  // Automatically log visitor telemetry once when the app loads
+  // Login Form States
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
   useEffect(() => {
-    async function logVisitor() {
-      try {
-        const response = await fetch('https://ipapi.co/json/');
-        const data = await response.json();
+    async function getSession() {
+      const { data: { session } } = await supabase.auth.getSession();
+      const currentUser = session?.user || null;
 
-        const town = data.city || 'Unspecified Town';
-        const country = data.country_name || 'Unspecified Country';
-        const ip = data.ip || '0.0.0.0';
+      if (currentUser) {
+        const { data: whitelist } = await supabase
+          .from('allowed_users')
+          .select('email')
+          .eq('email', currentUser.email)
+          .single();
 
-        await supabase.from('visitor_analytics').insert([
-          { 
-            visited_at: new Date().toISOString(),
-            town: town,
-            country: country,
-            ip_address: ip
-          }
-        ]);
-      } catch (err) {
-        console.error("Error logging visitor telemetry:", err);
-        try {
-          await supabase.from('visitor_analytics').insert([
-            { visited_at: new Date().toISOString(), town: 'Unspecified Town' }
-          ]);
-        } catch (fallbackErr) {
-          console.error("Fallback insert failed:", fallbackErr);
+        if (!whitelist) {
+          await supabase.auth.signOut();
+          setUser(null);
+          setCheckingSession(false);
+          return;
         }
+
+        setUser(currentUser);
       }
+      setCheckingSession(false);
     }
-    logVisitor();
+    getSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      setUser(session?.user || null);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setMessage('');
+    
+    try {
+      const cleanEmail = email.trim().toLowerCase();
+
+      const { data: whitelist, error: whitelistError } = await supabase
+        .from('allowed_users')
+        .select('email')
+        .eq('email', cleanEmail)
+        .single();
+
+      if (whitelistError || !whitelist) {
+        throw new Error('Access denied. Your email is not authorized by the administrator.');
+      }
+
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: password,
+      });
+
+      if (authError) throw authError;
+
+      if (data?.session) {
+        setUser(data.session.user);
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage(err.message || 'Invalid login credentials. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Universal handler for TESTS link across all pages
   const handleTestsClick = () => {
     setCurrentView('exam');
     if (window.scrollToConfigSection) {
@@ -55,196 +153,211 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    const handleBeforeInstallPrompt = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-  }, []);
-
-  const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setDeferredPrompt(null);
-      }
-    } else {
-      setShowInstallGuide(true);
-    }
-  };
-
+  // Secure Admin Keyboard Shortcut (Ctrl + Shift + A)
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
         e.preventDefault();
-        setCurrentView((prev) => (prev === 'admin' ? 'exam' : 'admin'));
+        const ADMIN_EMAILS = ['tryvo.info@gmail.com'];
+        if (user && ADMIN_EMAILS.includes(user.email.toLowerCase())) {
+          setCurrentView((prev) => (prev === 'admin' ? 'exam' : 'admin'));
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [user]);
 
-  return (
-    <div className="min-h-screen bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col font-sans selection:bg-[oklch(0.94_0.21_118)] selection:text-[oklch(0.16_0.03_265)]">
-      <div className="fixed inset-0 bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)] bg-[size:44px_44px] pointer-events-none z-0"></div>
-      <div className="fixed -top-40 -left-40 w-96 h-96 bg-[oklch(0.94_0.21_118)]/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
-      <div className="fixed -bottom-40 -right-40 w-96 h-96 bg-[oklch(0.68_0.16_245)]/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen bg-[oklch(0.16_0.03_265)] flex items-center justify-center font-mono text-xs text-[oklch(0.94_0.21_118)]">
+        LOADING TRYVO...
+      </div>
+    );
+  }
 
-      <header className="relative z-20 bg-[oklch(0.23_0.045_265)]/80 backdrop-blur-xl border-b border-white/10 px-6 sm:px-12 py-4 flex justify-between items-center">
-        <div 
-          className="flex items-center gap-3 cursor-pointer group"
-          onClick={() => {
-            setCurrentView('exam');
-            setExamPortalResetKey(prev => prev + 1);
-          }}
-        >
-          <div className="w-9 h-9 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-black flex items-center justify-center rounded-xl text-base font-mono shadow-[0_0_20px_rgba(204,255,0,0.35)] group-hover:scale-105 transition relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-br from-white/20 to-transparent pointer-events-none"></div>
-            <span className="tracking-tighter font-['Archivo_Black']">T</span>
+  // Pre-Login Page
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col font-sans relative overflow-x-hidden">
+        {/* Injecting marquee animation keyframes */}
+        <style>{`
+          @keyframes marquee {
+            0% { transform: translateX(0%); }
+            100% { transform: translateX(-50%); }
+          }
+          .animate-marquee {
+            display: inline-block;
+            white-space: nowrap;
+            animation: marquee 25s linear infinite;
+          }
+        `}</style>
+
+        <div className="fixed inset-0 bg-[linear-gradient(to_right,#ffffff05_1px,transparent_1px),linear-gradient(to_bottom,#ffffff05_1px,transparent_1px)] bg-[size:44px_44px] pointer-events-none z-0"></div>
+        <div className="fixed -top-40 -left-40 w-96 h-96 bg-[oklch(0.94_0.21_118)]/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
+        <div className="fixed -bottom-40 -right-40 w-96 h-96 bg-[oklch(0.68_0.16_245)]/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
+
+        <header className="relative z-20 bg-[oklch(0.23_0.045_265)]/80 backdrop-blur-xl border-b border-white/10 px-6 sm:px-12 py-5 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-black flex items-center justify-center rounded-xl text-lg font-mono shadow-[0_0_20px_rgba(204,255,0,0.35)]">
+              T
+            </div>
+            <span className="font-extrabold text-2xl text-[oklch(0.96_0.012_265)] tracking-tight">TRYVO</span>
           </div>
-          <div className="flex items-center gap-2.5">
-            <span className="font-extrabold tracking-tighter text-xl font-['Archivo_Black'] text-[oklch(0.96_0.012_265)]">TRYVO</span>
-            <span className="px-2 py-0.5 bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)] font-mono text-[9px] tracking-[0.2em] uppercase rounded-md font-bold">beta</span>
+          <span className="font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.68_0.04_265)]">Open Competitive Exam Practice</span>
+        </header>
+
+        {/* Horizontal Running Marquee Banner */}
+        <div className="bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-extrabold uppercase py-2.5 px-4 overflow-hidden whitespace-nowrap relative z-20 shadow-md">
+          <div className="animate-marquee tracking-wider">
+            Want free mock tests? Send us your goal at tryvo.info@gmail.com and get started today! &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Want free mock tests? Send us your goal at tryvo.info@gmail.com and get started today! &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; Want free mock tests? Send us your goal at tryvo.info@gmail.com and get started today!
           </div>
         </div>
 
+        <main className="flex-1 relative z-10 max-w-7xl mx-auto px-6 sm:px-12 py-12 grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+          <div className="lg:col-span-7 space-y-8">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 border border-white/10 font-mono text-xs text-[oklch(0.68_0.04_265)]">
+              <span className="w-2 h-2 rounded-full bg-[oklch(0.94_0.21_118)] animate-pulse"></span>
+              IMPOSSIBLE IS FOR THE UNWILLING - JOHN KEATS
+            </div>
+
+            <div className="space-y-5">
+              <h1 className="text-5xl sm:text-7xl font-black tracking-tight leading-[1.05]">
+                Master your competitive exams with <span className="text-[oklch(0.94_0.21_118)]">precision mocks.</span>
+              </h1>
+              <p className="font-sans text-lg text-[oklch(0.68_0.04_265)] leading-relaxed max-w-xl">
+                Access professional-grade mock exams for competitive tests completely free. Simulate real testing conditions, track your performance, and outperform the competition.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 font-mono text-xs">
+              <div className="bg-[oklch(0.23_0.045_265)]/80 border border-white/10 rounded-2xl p-5 space-y-2">
+                <div className="text-[oklch(0.94_0.21_118)] font-bold text-sm">⚡ Real Exam Simulations</div>
+                <p className="text-[oklch(0.68_0.04_265)] font-sans text-xs">Timed sprints and structured question modules matching actual exams.</p>
+              </div>
+              <div className="bg-[oklch(0.23_0.045_265)]/80 border border-white/10 rounded-2xl p-5 space-y-2">
+                <div className="text-[oklch(0.94_0.21_118)] font-bold text-sm">📈 Smart Analytics</div>
+                <p className="text-[oklch(0.68_0.04_265)] font-sans text-xs">Instant score breakdowns and detailed solution reviews.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-5 w-full max-w-md mx-auto bg-[oklch(0.23_0.045_265)] border border-white/15 rounded-3xl p-8 shadow-2xl space-y-6 backdrop-blur-xl">
+            <div className="text-center space-y-2">
+              <h2 className="text-2xl font-black tracking-tight">Access Tryvo</h2>
+              <p className="font-mono text-xs text-[oklch(0.68_0.04_265)] uppercase tracking-wider">Enter your whitelisted credentials</p>
+            </div>
+
+            {message && (
+              <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs font-mono text-rose-400 text-center">
+                {message}
+              </div>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  placeholder="name@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-white focus:outline-none focus:border-[oklch(0.94_0.21_118)]"
+                />
+              </div>
+
+              <div>
+                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-white focus:outline-none focus:border-[oklch(0.94_0.21_118)]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-extrabold uppercase tracking-[0.15em] rounded-xl shadow-[0_0_20px_rgba(204,255,0,0.2)] transition cursor-pointer"
+              >
+                {loading ? 'AUTHENTICATING...' : 'LOGIN TO BATTLEGROUND →'}
+              </button>
+            </form>
+          </div>
+        </main>
+
+        <footer className="relative z-10 bg-[oklch(0.16_0.03_265)] border-t border-white/10 px-6 sm:px-12 py-6 text-center font-mono text-xs text-[oklch(0.68_0.04_265)]">
+          © 2026 Tryvo Labs. All rights reserved.
+        </footer>
+      </div>
+    );
+  }
+
+  // Post-Login Page
+  return (
+    <div className="min-h-screen bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col font-sans">
+      <header className="relative z-20 bg-[oklch(0.23_0.045_265)]/80 backdrop-blur-xl border-b border-white/10 px-6 sm:px-12 py-4 flex justify-between items-center">
+        <div 
+          className="flex items-center gap-3 cursor-pointer group"
+          onClick={handleTestsClick}
+        >
+          <div className="w-9 h-9 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-black flex items-center justify-center rounded-xl text-base font-mono shadow-[0_0_20px_rgba(204,255,0,0.35)]">
+            T
+          </div>
+          <span className="font-extrabold text-xl text-[oklch(0.96_0.012_265)]">TRYVO</span>
+        </div>
+
         <nav className="hidden md:flex items-center gap-8 font-mono text-xs tracking-[0.15em] text-[oklch(0.68_0.04_265)] uppercase font-semibold">
-          <button onClick={handleTestsClick} className="hover:text-[oklch(0.96_0.012_265)] transition cursor-pointer">TESTS</button>
-          <button onClick={() => setCurrentView('STUDY MATERIAL')} className="hover:text-[oklch(0.96_0.012_265)] transition cursor-pointer">STUDY MATERIAL</button>
-          <button onClick={() => setCurrentView('about')} className="hover:text-[oklch(0.96_0.012_265)] transition cursor-pointer">ABOUT US</button>
+          <button onClick={handleTestsClick} className="hover:text-white cursor-pointer">TESTS</button>
+          <button onClick={() => setCurrentView('analytics')} className="hover:text-white cursor-pointer">ANALYTICS</button>
+          <button onClick={() => setCurrentView('STUDY MATERIAL')} className="hover:text-white cursor-pointer">STUDY MATERIAL</button>
+          <button onClick={() => setCurrentView('about')} className="hover:text-white cursor-pointer">ABOUT US</button>
         </nav>
 
         <div className="flex items-center gap-3">
           <button
-            onClick={handleInstallClick}
-            className="px-5 py-2.5 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_20px_rgba(204,255,0,0.25)] transition cursor-pointer"
+            onClick={() => setIsPasswordModalOpen(true)}
+            className="px-3.5 py-2 bg-[oklch(0.16_0.03_265)] text-[oklch(0.94_0.21_118)] font-mono text-xs uppercase font-bold rounded-xl border border-white/10 cursor-pointer"
           >
-            Install App
+            🔑 Change Password
+          </button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="px-4 py-2 bg-rose-600/20 border border-rose-500/30 text-rose-300 font-mono text-xs uppercase rounded-xl cursor-pointer"
+          >
+            Sign Out
           </button>
         </div>
       </header>
 
       <main className="flex-1 flex flex-col relative z-10">
         {currentView === 'exam' && <ExamPortal key={examPortalResetKey} />}
-        {currentView === 'admin' && <BulkExcelUploader />}
+        {currentView === 'admin' && <AdminPortalWrapper />}
+        {currentView === 'analytics' && <UserAnalytics user={user} />}
         {currentView === 'STUDY MATERIAL' && (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
-            <h1 className="text-3xl sm:text-5xl font-extrabold font-['Archivo_Black'] text-[oklch(0.94_0.21_118)]">Under Construction</h1>
-            <p className="font-mono text-sm text-[oklch(0.68_0.04_265)] uppercase tracking-wider">We are building something awesome for Study Material. Check back soon!</p>
-            <button 
-              onClick={() => setCurrentView('exam')}
-              className="mt-4 px-6 py-3 bg-[oklch(0.23_0.045_265)] hover:bg-[oklch(0.23_0.045_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-widest rounded-xl transition cursor-pointer"
-            >
-              ← Return to Tests
-            </button>
+            <h1 className="text-3xl font-extrabold text-[oklch(0.94_0.21_118)]">Under Construction</h1>
+            <p className="font-mono text-sm text-[oklch(0.68_0.04_265)] uppercase">Check back soon for curated study materials!</p>
           </div>
         )}
         {currentView === 'about' && (
-          <div className="flex-1 flex flex-col items-center justify-start p-6 sm:p-16 max-w-4xl mx-auto space-y-8">
-            <div className="space-y-3 text-center">
-              <h1 className="text-3xl sm:text-5xl font-black font-['Archivo_Black'] tracking-tight text-[oklch(0.94_0.21_118)]">ABOUT US</h1>
-              <p className="font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.68_0.04_265)] font-bold">Develop Together</p>
-            </div>
-
-            <div className="bg-[oklch(0.23_0.045_265)]/80 backdrop-blur-xl border border-white/10 rounded-3xl p-8 sm:p-12 space-y-6 text-sm sm:text-base font-sans text-[oklch(0.96_0.012_265)] leading-relaxed shadow-2xl">
-              <div>
-                <h3 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] mb-2">Our Mission: Education for All</h3>
-                <p>
-                  We are a group of friends united by a single, powerful vision: making quality education free and accessible to everyone. By providing high-quality, free mock tests for competitive exams, we are working to level the playing field and contribute to the development of society as a whole. Our guiding philosophy is simple: &quot;Develop Together.&quot;
-                </p>
-              </div>
-
-              <p>
-                If you believe we are on the right path and share our passion for accessible education, we warmly invite you to become a part of our journey.
-              </p>
-
-              <div className="space-y-4 pt-4 border-t border-white/10">
-                <h3 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)]">How You Can Be a Part of the Team</h3>
-                <p className="text-xs sm:text-sm text-[oklch(0.68_0.04_265)] font-mono">There is a place for everyone in this mission. Here are a few ways you can support the cause in whatever capacity you can:</p>
-                
-                <ul className="space-y-3 list-disc pl-5 text-sm">
-                  <li>
-                    <strong className="text-white">Share Your Thoughts:</strong> Your words fuel our work. Whether it’s constructive feedback to help us improve or a simple note of appreciation, we’d love to hear from you at <a href="mailto:tryvo.info@gmail.com" className="text-[oklch(0.94_0.21_118)] underline hover:brightness-110">tryvo.info@gmail.com</a>.
-                  </li>
-                  <li>
-                    <strong className="text-white">Share Your Expertise:</strong> Are you highly skilled in a particular subject? Reach out to us! We can collaborate to share your knowledge and content with students who need it most.
-                  </li>
-                  <li>
-                    <strong className="text-white">Contribute Financially:</strong> If you are short on time but wish to help us keep the lights on, financial contributions toward our operating expenses are deeply appreciated. We hold ourselves to the highest standards of transparency—every single rupee is accounted for and completely auditable.
-                  </li>
-                  <li>
-                    <strong className="text-white">Support in Kind:</strong> Hesitant to contribute financially? We completely understand and respect that trust must be earned. You can still make a massive impact by donating books, providing study materials, offering a physical space where we could host free coaching, or contributing in any other creative way you fit.
-                  </li>
-                </ul>
-              </div>
-            </div>
-
-            <button 
-              onClick={() => setCurrentView('exam')}
-              className="px-6 py-3 bg-[oklch(0.23_0.045_265)] hover:bg-[oklch(0.23_0.045_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-widest rounded-xl transition cursor-pointer"
-            >
-              ← Return to Tests
-            </button>
+          <div className="flex-1 flex flex-col items-center justify-start p-12 max-w-3xl mx-auto space-y-6 text-center">
+            <h1 className="text-4xl font-black text-[oklch(0.94_0.21_118)]">About Tryvo</h1>
+            <p className="font-sans text-base text-[oklch(0.96_0.012_265)] leading-relaxed">
+              We are a group of friends united by a single, powerful vision: making quality education free and accessible to everyone. By providing high-quality, free mock tests for competitive exams, we are working to level the playing field. Our guiding philosophy is simple: <strong className="text-[oklch(0.94_0.21_118)]">&quot;Develop Together.&quot;</strong>
+            </p>
           </div>
         )}
       </main>
 
-      {/* Install App Instruction Modal */}
-      {showInstallGuide && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <div className="bg-[oklch(0.23_0.045_265)] border border-white/15 rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-6 shadow-2xl text-[oklch(0.96_0.012_265)] font-mono">
-            <div className="flex justify-between items-center border-b border-white/10 pb-4">
-              <h3 className="text-lg font-black font-['Archivo_Black'] text-[oklch(0.94_0.21_118)]">INSTALL TRYVO</h3>
-              <button 
-                onClick={() => setShowInstallGuide(false)}
-                className="text-xs text-white bg-white/10 px-2.5 py-1 rounded-xl hover:bg-white/25 transition cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-4 text-xs font-sans text-[oklch(0.68_0.04_265)] leading-relaxed">
-              <p>
-                Your browser is managing the installation prompt automatically. You can install Tryvo manually in just two clicks:
-              </p>
-              
-              <div className="space-y-3 font-mono bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
-                <div className="flex items-start gap-3">
-                  <span className="w-5 h-5 shrink-0 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] rounded-full flex items-center justify-center font-bold text-[10px]">1</span>
-                  <p><strong className="text-white">Desktop (Chrome / Edge):</strong> Click the three vertical dots (<span className="text-[oklch(0.94_0.21_118)]">⋮</span>) in the top-right corner of your browser window.</p>
-                </div>
-                <div className="flex items-start gap-3">
-                  <span className="w-5 h-5 shrink-0 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] rounded-full flex items-center justify-center font-bold text-[10px]">2</span>
-                  <p>Select <strong className="text-white">&quot;Install Tryvo...&quot;</strong> or <strong className="text-white">&quot;Save and share → Install page as app&quot;</strong>.</p>
-                </div>
-                <div className="flex items-start gap-3">
-                  <span className="w-5 h-5 shrink-0 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] rounded-full flex items-center justify-center font-bold text-[10px]">📱</span>
-                  <p><strong className="text-white">Mobile:</strong> Tap your browser menu and choose <strong className="text-white">&quot;Add to Home Screen&quot;</strong>.</p>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowInstallGuide(false)}
-              className="w-full py-3 bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] text-xs font-bold uppercase tracking-widest rounded-xl transition cursor-pointer hover:brightness-110 shadow"
-            >
-              Got It
-            </button>
-          </div>
-        </div>
-      )}
-
-      <footer className="relative z-10 bg-[oklch(0.16_0.03_265)] border-t border-white/10 px-6 sm:px-12 py-6 text-center font-mono text-xs text-[oklch(0.68_0.04_265)] flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div>© 2026 Tryvo Labs. All rights reserved.</div>
-        <div className="flex gap-6 uppercase tracking-[0.15em] text-[11px]">
-          <span className="hover:text-[oklch(0.96_0.012_265)] cursor-pointer transition">Privacy</span>
-          <span className="hover:text-[oklch(0.96_0.012_265)] cursor-pointer transition">Terms</span>
-          <a href="mailto:tryvo.info@gmail.com" className="hover:text-[oklch(0.96_0.012_265)] cursor-pointer transition">Support</a>
-        </div>
-      </footer>
+      <ChangePasswordModal
+        isOpen={isPasswordModalOpen}
+        onClose={() => setIsPasswordModalOpen(false)}
+      />
     </div>
   );
 }

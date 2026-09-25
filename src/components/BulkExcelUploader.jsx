@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabaseClient';
 
@@ -52,8 +52,6 @@ export default function BulkExcelUploader() {
     setAnalyticsLoading(false);
   };
 
-  const [sections, setSections] = useState([]);
-  const [selectedSection, setSelectedSection] = useState('');
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -62,52 +60,35 @@ export default function BulkExcelUploader() {
   const [validRows, setValidRows] = useState([]);
   const [invalidRows, setInvalidRows] = useState([]);
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    async function fetchSections() {
-      const { data, error } = await supabase.from('exam_sections').select('*');
-      if (error) {
-        setStatusMessage('Error loading sections: ' + error.message);
-      } else if (data && data.length > 0) {
-        setSections(data);
-        setSelectedSection(data[0].section_id);
-      } else {
-        setStatusMessage('Warning: No sections found in Supabase database.');
-      }
-    }
-    fetchSections();
-  }, [isAuthenticated]);
-
   const downloadTemplate = () => {
     const sampleData = [
       {
-        subtopic_name: "Data Interpretation",
+        subtopic_name: "Simplification & Approximation",
         difficulty_level: "Medium",
         "Image URL": "https://example.com/chart1.png",
         passage_id: "DI_SET_01",
-        passage_text: "Study the following table carefully and answer the questions given below. Data shows revenue of 3 companies over 4 years.",
-        question_text: "What is the average revenue of Company A across all years?",
-        option_1: "120",
-        option_2: "140",
-        option_3: "160",
-        option_4: "180",
-        correct_option_number: 2,
-        solution_explanation: "Sum of revenues divided by total years gives 140."
+        passage_text: "Study the table carefully and answer the questions.",
+        question_text: "What is the value of 45% of 800 + 30% of 600?",
+        option_1: "540",
+        option_2: "520",
+        option_3: "560",
+        option_4: "580",
+        correct_option_number: 1,
+        solution_explanation: "360 + 180 = 540."
       }
     ];
 
     const worksheet = XLSX.utils.json_to_sheet(sampleData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "QuestionsTemplate");
-    XLSX.writeFile(workbook, "exam_questions_template.xlsx");
+    XLSX.writeFile(workbook, "tryvo_subtopic_questions_template.xlsx");
   };
 
   const handleFileChange = (e) => {
     const uploadedFile = e.target.files[0];
     if (!uploadedFile) return;
     setFile(uploadedFile);
-    setStatusMessage('Analyzing and validating rows...');
+    setStatusMessage('Analyzing and validating rows against subtopic schema...');
 
     const reader = new FileReader();
     reader.onload = (evt) => {
@@ -123,11 +104,15 @@ export default function BulkExcelUploader() {
 
         data.forEach((row, index) => {
           let errors = [];
+          const subName = row.subtopic_name || row.Subtopic;
           const qText = row.question_text || row.Question;
           const opt1 = row.option_1 ?? row.Opt1;
           const opt2 = row.option_2 ?? row.Opt2;
           const correctNum = row.correct_option_number || row.CorrectAnswer;
 
+          if (!subName || String(subName).trim() === '') {
+            errors.push('Missing subtopic name');
+          }
           if (!qText || String(qText).trim() === '') {
             errors.push('Missing question text');
           }
@@ -147,7 +132,7 @@ export default function BulkExcelUploader() {
 
         setValidRows(valid);
         setInvalidRows(invalid);
-        setStatusMessage(`Validation complete: ${valid.length} valid rows, ${invalid.length} invalid rows skipped.`);
+        setStatusMessage(`Validation complete: ${valid.length} valid rows ready, ${invalid.length} rejected.`);
       } catch (err) {
         console.error(err);
         setStatusMessage('Error parsing Excel file format.');
@@ -163,19 +148,15 @@ export default function BulkExcelUploader() {
       setStatusMessage('No valid rows available to import.');
       return;
     }
-    if (!selectedSection) {
-      setStatusMessage('Please select a target section.');
-      return;
-    }
 
     setLoading(true);
-    setStatusMessage(`Preparing ${validRows.length} validated questions for batch upload...`);
+    setStatusMessage(`Preparing ${validRows.length} validated questions for subtopic-based batch upload...`);
 
     try {
+      // Fetch existing subtopics to map names to IDs dynamically
       let { data: existingSubtopics } = await supabase
         .from('subtopics')
-        .select('subtopic_id, subtopic_name')
-        .eq('section_id', selectedSection);
+        .select('subtopic_id, subtopic_name');
 
       const subtopicMap = new Map();
       existingSubtopics?.forEach(sub => {
@@ -217,11 +198,12 @@ export default function BulkExcelUploader() {
 
         if (!qText) continue;
 
+        // Dynamically find or create the subtopic ID based on subtopic_name in Excel
         let targetSubtopicId = subtopicMap.get(subtopicName.toLowerCase());
         if (!targetSubtopicId) {
           targetSubtopicId = 'SUB_' + Math.random().toString(36).substring(2, 9);
           const { error: subErr } = await supabase.from('subtopics').insert([
-            { subtopic_id: targetSubtopicId, section_id: selectedSection, subtopic_name: subtopicName }
+            { subtopic_id: targetSubtopicId, subtopic_name: subtopicName }
           ]);
           if (subErr) throw subErr;
           subtopicMap.set(subtopicName.toLowerCase(), targetSubtopicId);
@@ -287,7 +269,7 @@ export default function BulkExcelUploader() {
         if (optErr) throw optErr;
       }
 
-      setStatusMessage(`Successfully uploaded ${successCount} clean questions in seconds!`);
+      setStatusMessage(`Successfully uploaded ${successCount} questions mapped to subtopics!`);
       setFile(null);
       setValidRows([]);
       setInvalidRows([]);
@@ -380,8 +362,8 @@ export default function BulkExcelUploader() {
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div>
-                <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">BULK QUESTION INGESTION</h2>
-                <p className="text-xs font-mono text-[oklch(0.68_0.04_265)] mt-1 tracking-wider uppercase">Pre-flight validation engine active</p>
+                <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">BULK SUBTOPIC INGESTION</h2>
+                <p className="text-xs font-mono text-[oklch(0.68_0.04_265)] mt-1 tracking-wider uppercase">Questions map dynamically via subtopic names</p>
               </div>
               <button
                 onClick={downloadTemplate}
@@ -398,25 +380,6 @@ export default function BulkExcelUploader() {
               </div>
             )}
 
-            <div>
-              <label className="block font-mono text-xs uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Target Section Module</label>
-              <select
-                value={selectedSection}
-                onChange={(e) => setSelectedSection(e.target.value)}
-                className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] font-mono focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
-              >
-                {sections.length > 0 ? (
-                  sections.map((sec) => (
-                    <option key={sec.section_id} value={sec.section_id} className="bg-[oklch(0.16_0.03_265)] text-white">
-                      {sec.section_name}
-                    </option>
-                  ))
-                ) : (
-                  <option value="" className="bg-[oklch(0.16_0.03_265)] text-white">No sections available</option>
-                )}
-              </select>
-            </div>
-
             <div className="border-2 border-dashed border-white/10 rounded-2xl p-8 text-center bg-[oklch(0.16_0.03_265)]/50 hover:border-[oklch(0.94_0.21_118)]/50 transition cursor-pointer relative group">
               <input
                 type="file"
@@ -431,7 +394,7 @@ export default function BulkExcelUploader() {
                 <p className="font-mono text-xs uppercase tracking-wider text-[oklch(0.96_0.012_265)] font-bold">
                   {file ? file.name : 'Drop Excel/CSV dataset or browse'}
                 </p>
-                <p className="font-mono text-[10px] text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Automatic schema pre-check enforced</p>
+                <p className="font-mono text-[10px] text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Requires subtopic_name column in sheet</p>
               </div>
             </div>
 
@@ -460,7 +423,7 @@ export default function BulkExcelUploader() {
                     <h4 className="text-[11px] font-bold text-rose-400 uppercase tracking-[0.15em]">Rejected Dataset Log:</h4>
                     {invalidRows.map((inv, i) => (
                       <div key={i} className="text-xs text-[oklch(0.68_0.04_265)] flex justify-between items-center border-b border-white/5 pb-1.5">
-                        <span className="truncate pr-2">Row #{inv.rowNumber}: <span className="text-[oklch(0.96_0.012_265)]">{inv.data.question_text || inv.data.Question || 'Blank Question'}</span></span>
+                        <span className="truncate pr-2">Row #{inv.rowNumber}: <span className="text-[oklch(0.96_0.012_265)]">{inv.data.question_text || inv.data.Question || 'Blank'}</span></span>
                         <span className="text-rose-400 shrink-0 font-bold text-[10px] bg-rose-500/10 px-2 py-0.5 rounded">{inv.errors.join(', ')}</span>
                       </div>
                     ))}
@@ -474,7 +437,7 @@ export default function BulkExcelUploader() {
               disabled={loading || validRows.length === 0}
               className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition disabled:opacity-40 cursor-pointer"
             >
-              {loading ? 'PROCESSING BATCHES...' : `DEPLOY ${validRows.length} VALID QUESTIONS TO TRYVO →`}
+              {loading ? 'PROCESSING BATCHES...' : `DEPLOY ${validRows.length} SUBTOPIC QUESTIONS →`}
             </button>
           </div>
         )}
@@ -510,7 +473,6 @@ export default function BulkExcelUploader() {
                   </div>
                 </div>
 
-                {/* City-by-City Breakdown List */}
                 <div className="bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-2xl p-5 space-y-3">
                   <h3 className="text-[11px] font-bold text-[oklch(0.96_0.012_265)] uppercase tracking-[0.15em]">Regional Grid Activity</h3>
                   
@@ -526,36 +488,6 @@ export default function BulkExcelUploader() {
                           </span>
                         </div>
                       ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Detailed Percentage Breakdown Table */}
-                <div className="bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-2xl p-5">
-                  <h3 className="text-[11px] font-bold text-[oklch(0.96_0.012_265)] uppercase tracking-[0.15em] mb-4">Traffic Share Distribution</h3>
-                  {townStats.length > 0 && (
-                    <div className="overflow-x-auto max-h-52 overflow-y-auto">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] uppercase tracking-[0.15em] sticky top-0 font-bold">
-                          <tr>
-                            <th className="p-3">Zone / City</th>
-                            <th className="p-3 text-right">Pings</th>
-                            <th className="p-3 text-right">Share</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-white/5">
-                          {townStats.map((stat, idx) => {
-                            const percent = totalVisits > 0 ? ((stat.count / totalVisits) * 100).toFixed(1) : 0;
-                            return (
-                              <tr key={idx} className="hover:bg-white/[0.02] transition">
-                                <td className="p-3 font-medium text-[oklch(0.96_0.012_265)]">{stat.town}</td>
-                                <td className="p-3 text-right font-mono text-[oklch(0.94_0.21_118)] font-bold">{stat.count}</td>
-                                <td className="p-3 text-right font-mono text-[oklch(0.68_0.04_265)]">{percent}%</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
                     </div>
                   )}
                 </div>
