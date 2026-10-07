@@ -5,6 +5,7 @@ import BulkExcelUploader from './components/BulkExcelUploader';
 import AdminCurriculumBuilder from './components/AdminCurriculumBuilder';
 import AdminExamCreator from './components/AdminExamCreator';
 import AdminUserAllocator from './components/AdminUserAllocator';
+import AdminQuestionManager from './components/AdminQuestionManager'; // <--- THIS WAS MISSING
 import UserAnalytics from './components/UserAnalytics';
 import ChangePasswordModal from './components/ChangePasswordModal';
 
@@ -50,6 +51,14 @@ function AdminPortalWrapper() {
         >
           🛡️ Access Control & Exams
         </button>
+        <button
+          onClick={() => setAdminTab('qmanager')}
+          className={`px-5 py-2.5 rounded-xl font-bold tracking-wider transition cursor-pointer ${
+            adminTab === 'qmanager' ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : 'text-white'
+          }`}
+        >
+          📋 Question Manager
+        </button>
       </div>
 
       <div className="flex-1 flex flex-col">
@@ -57,6 +66,7 @@ function AdminPortalWrapper() {
         {adminTab === 'excel' && <BulkExcelUploader />}
         {adminTab === 'exams' && <AdminExamCreator />}
         {adminTab === 'access' && <AdminUserAllocator />}
+        {adminTab === 'qmanager' && <AdminQuestionManager />}
       </div>
     </div>
   );

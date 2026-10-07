@@ -1,5 +1,89 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
+import katex from 'katex';
+import ReactApexChart from 'react-apexcharts';
+
+// Inline chart renderer for Data Interpretation questions
+function DIChartRenderer({ chartType, categories, data, tableData }) {
+  const isLine = chartType === 'line';
+  const isPie = chartType === 'pie' || chartType === 'donut';
+
+  let parsedTable = tableData;
+  if (typeof tableData === 'string') {
+    try {
+      parsedTable = JSON.parse(tableData);
+    } catch (e) {
+      parsedTable = null;
+    }
+  }
+
+  const chartOptions = {
+    chart: { 
+      toolbar: { show: false }, 
+      background: 'transparent',
+      type: chartType || 'bar'
+    },
+    theme: { mode: 'dark' },
+    colors: ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#38bdf8'],
+    ...(isPie ? {
+      labels: categories || [],
+      legend: { position: 'bottom', labels: { colors: '#fff' } }
+    } : {
+      xaxis: { categories: categories || [], labels: { style: { colors: '#94a3b8' } } },
+      yaxis: { labels: { style: { colors: '#94a3b8' } } },
+      ...(isLine ? {
+        stroke: { curve: 'smooth', width: 3 },
+        markers: { size: 5 }
+      } : {})
+    })
+  };
+
+  const chartSeries = isPie ? (data || []) : [{ name: 'Values', data: data || [] }];
+  
+  // Check if we have valid chart data to display
+  const hasChartData = data && Array.isArray(data) && data.length > 0;
+
+  return (
+    <div className="space-y-4 w-full">
+      {/* Tailwind CSS UI Table */}
+      {parsedTable && parsedTable.headers && parsedTable.rows ? (
+        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/80 shadow-lg">
+          <table className="w-full text-left text-xs font-mono text-slate-200">
+            <thead className="bg-slate-900 text-indigo-400 uppercase tracking-wider border-b border-slate-800">
+              <tr>
+                {parsedTable.headers.map((header, idx) => (
+                  <th key={idx} className="px-3 py-2.5 font-bold">{header}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {parsedTable.rows.map((row, rIdx) => (
+                <tr key={rIdx} className="hover:bg-slate-900/50 transition-colors">
+                  {row.map((cell, cIdx) => (
+                    <td key={cIdx} className="px-3 py-2 font-sans">{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {/* ApexCharts Graph - Rendered ONLY if chart data exists */}
+      {hasChartData && (
+        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-lg w-full flex justify-center items-center">
+          <ReactApexChart 
+            options={chartOptions} 
+            series={chartSeries} 
+            type={chartType || 'bar'} 
+            height={240} 
+            width="100%"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 const shuffleArray = (array) => {
   const shuffled = [...array];
@@ -10,7 +94,31 @@ const shuffleArray = (array) => {
   return shuffled;
 };
 
-// Text cleaner to remove Excel/UTF-8 encoding artifacts (like â□□, â€–, etc.)
+const handleWeightChange = (changedSubId, newPercentage, categorySubtopics, allWeights, setAllWeights) => {
+  const targetVal = Math.max(0, Math.min(100, Number(newPercentage)));
+  const updatedWeights = { ...allWeights, [changedSubId]: targetVal };
+
+  const otherSubs = categorySubtopics.filter(s => (s.id || s.subtopic_id) !== changedSubId);
+  
+  if (otherSubs.length > 0) {
+    const remainingPool = 100 - targetVal;
+    const currentOtherSum = otherSubs.reduce((sum, s) => sum + (allWeights[s.id || s.subtopic_id] || 0), 0);
+
+    otherSubs.forEach(s => {
+      const sId = s.id || s.subtopic_id;
+      const oldVal = allWeights[sId] || 0;
+      if (currentOtherSum > 0) {
+        updatedWeights[sId] = Number(((oldVal / currentOtherSum) * remainingPool).toFixed(1));
+      } else {
+        updatedWeights[sId] = Number((remainingPool / otherSubs.length).toFixed(1));
+      }
+    });
+  }
+
+  setAllWeights(updatedWeights);
+};
+
+// Text cleaner to remove Excel/UTF-8 encoding artifacts
 const cleanText = (text) => {
   if (!text) return '';
   return String(text)
@@ -19,36 +127,77 @@ const cleanText = (text) => {
     .replace(/â□□/g, ', ')
     .replace(/â€™/g, "'")
     .replace(/â€œ/g, '"')
-    .replace(/â€/g, '"')
-    .replace(/â€¦/g, '…')
-    .replace(/â□□/g, ' ');
+    .replace(/â€ /g, '"')
+    .replace(/â€¦/g, '…');
 };
+
+function MathText({ text }) {
+  const htmlContent = useMemo(() => {
+    if (!text) return '';
+    let processed = cleanText(text);
+
+    processed = processed.replace(/\\\[([\s\S]*?)\\\]/g, (m, f) => `$$${f.trim()}$$`);
+
+    while (processed.includes('\\(') && processed.includes('\\)')) {
+      const startIndex = processed.indexOf('\\(');       const endIndex = processed.indexOf('\\)', startIndex);
+      if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+        const formula = processed.substring(startIndex + 2, endIndex);
+        try {
+          const renderedMath = katex.renderToString(formula.trim(), { displayMode: false, throwOnError: false });
+          processed = processed.substring(0, startIndex) + renderedMath + processed.substring(endIndex + 2);
+        } catch (e) {
+          break;
+        }
+      } else {
+        break;
+      }
+    }
+
+    processed = processed.replace(/\$\$([\s\S]*?)\$\$/g, (match, formula) => {
+      try {
+        return katex.renderToString(formula.trim(), { displayMode: true, throwOnError: false });
+      } catch (e) {
+        return match;
+      }
+    });
+
+    processed = processed.replace(/\$([^\$\n]+?)\$/g, (match, formula) => {
+      try {
+        return katex.renderToString(formula.trim(), { displayMode: false, throwOnError: false });
+      } catch (e) {
+        return match;
+      }
+    });
+
+    return processed;
+  }, [text]);
+
+  return <span className="break-words" dangerouslySetInnerHTML={{ __html: htmlContent }} />;
+}
 
 export default function ExamPortal() {
   const [stage, setStage] = useState('config'); // 'config' | 'exam' | 'result' | 'solutions' | 'swot' | 'construction'
   const [exams, setExams] = useState([]);
   const [subtopics, setSubtopics] = useState([]);
   const [constructionTitle, setConstructionTitle] = useState('');
+  const [subWeights, setSubWeights] = useState({});
   
   const [selectedExamId, setSelectedExamId] = useState('');
-  const [testMode, setTestMode] = useState('Full-Length Mock'); // 'Full-Length Mock' | 'Time-Based Practice' | 'Topic-Based'
-  const [mockTimingMode, setMockTimingMode] = useState('liberal'); // 'liberal' | 'strict'
+  const [testMode, setTestMode] = useState('Full-Length Mock'); 
+  const [mockTimingMode, setMockTimingMode] = useState('liberal'); 
   
-  // Cascading Topic Drill State
   const [selectedMainCategory, setSelectedMainCategory] = useState('');
   const [selectedSubtopicId, setSelectedSubtopicId] = useState('');
 
   const [practiceMinutes, setPracticeMinutes] = useState(15);
   const [loading, setLoading] = useState(false);
 
-  // Daily Dilemma Hero Card State
   const [dilemmaQuestion, setDilemmaQuestion] = useState(null);
   const [dilemmaOptions, setDilemmaOptions] = useState([]);
   const [dilemmaSelectedIndex, setDilemmaSelectedIndex] = useState(null);
   const [dilemmaSubmitted, setDilemmaSubmitted] = useState(false);
   const [dilemmaTimer, setDilemmaTimer] = useState(60);
 
-  // Multi-section structure state
   const [sections, setSections] = useState([]);
   const [activeSectionIndex, setActiveSectionIndex] = useState(0);
   const [sectionQuestionsMap, setSectionQuestionsMap] = useState({}); 
@@ -65,7 +214,8 @@ export default function ExamPortal() {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
 
-  // Expose global navigation handler so parent App.jsx can trigger 'tests' view smoothly
+  const [diQuestionsList, setDiQuestionsList] = useState([]);
+
   useEffect(() => {
     window.scrollToConfigSection = () => {
       setStage('config');
@@ -76,14 +226,13 @@ export default function ExamPortal() {
     };
   }, []);
 
-  // Browser navigation guard & accidental click protection during active exam session
   useEffect(() => {
     if (stage !== 'exam') return;
 
     window.history.pushState(null, '', window.location.href);
 
     const handlePopState = (e) => {
-      const confirmLeave = window.confirm("⚠️ Active Exam Warning: You cannot leave this page until you submit your test. Are you sure you want to terminate your session?");
+      const confirmLeave = window.confirm("⚠️️ Active Exam Warning: You cannot leave this page until you submit your test. Are you sure you want to terminate your session?");
       if (confirmLeave) {
         setStage('config');
       } else {
@@ -101,12 +250,10 @@ export default function ExamPortal() {
       const targetLink = e.target.closest('a, button');
       if (!targetLink) return;
 
-      // Allow interaction within the active exam container HUD and controllers
       if (targetLink.closest('.exam-active-container') || targetLink.classList.contains('exam-nav-action')) {
         return;
       }
 
-      // Intercept accidental clicks on headers, external tabs, or menu links
       e.preventDefault();
       e.stopPropagation();
       window.alert("🔒 Exam Lock Active: You cannot switch tabs or leave during an active exam session. Please submit your test when finished.");
@@ -146,7 +293,6 @@ export default function ExamPortal() {
     return sortedQuestions;
   };
 
-  // Load metadata and filter exams based on user allocations
   useEffect(() => {
     async function loadMetaAndDilemma() {
       try {
@@ -206,7 +352,6 @@ export default function ExamPortal() {
     loadMetaAndDilemma();
   }, []);
 
-  // Dilemma 1-minute countdown tick
   useEffect(() => {
     if (stage !== 'config') return;
     const ticker = setInterval(() => {
@@ -220,6 +365,68 @@ export default function ExamPortal() {
     let testDurationMinutes = 60;
 
     try {
+      let diData = null;
+      if (testMode === 'Topic-Based') {
+        const selectedSub = subtopics.find(s => (s.subtopic_id || s.id) === selectedSubtopicId);
+        const subName = (selectedSub?.subtopic_name || selectedSub?.name || '').toLowerCase();
+        
+        if (subName.includes('data interpretation') || subName.includes('di')) {
+          const { data } = await supabase.from('di_questions').select('*');
+          diData = data;
+        }
+      }
+
+      if (diData && diData.length > 0) {
+        const formattedDiList = diData.map((di) => {
+          let parsedOptions = [];
+          try {
+            parsedOptions = typeof di.options === 'string' ? JSON.parse(di.options) : di.options;
+          } catch (e) {
+            parsedOptions = [];
+          }
+
+          const formattedOptions = parsedOptions.map((optText, oIdx) => ({
+            id: `di_opt_${oIdx}`,
+            option_text: optText,
+            is_correct: oIdx === 1
+          }));
+
+          let parsedTableData = di.table_data;
+          if (!parsedTableData && di.passage_text && di.passage_text.trim().startsWith('{')) {
+            try {
+              parsedTableData = JSON.parse(di.passage_text);
+            } catch (e) {
+              parsedTableData = null;
+            }
+          }
+
+          return {
+            ...di,
+            question_id: di.id,
+            question_text: di.question_text,
+            question_options: formattedOptions,
+            chart_data: typeof di.chart_data === 'string' ? JSON.parse(di.chart_data) : di.chart_data,
+            chart_categories: typeof di.chart_categories === 'string' ? JSON.parse(di.chart_categories) : di.chart_categories,
+            table_data: parsedTableData
+          };
+        });
+
+        setDiQuestionsList(formattedDiList);
+        setSections([{ section_id: 'DI_SECTION', section_name: 'Data Interpretation' }]);
+        setSectionQuestionsMap({ DI_SECTION: formattedDiList });
+        setSectionTimeLefts({ DI_SECTION: 900 });
+        setActiveSectionIndex(0);
+        setCurrentIndex(0);
+        setTimeLeft(900);
+        setUserAnswers({});
+        setQuestionTimers({});
+        setReviewStatus({});
+        setVisitedQuestions(new Set([formattedDiList[0]?.question_id]));
+        setStage('exam');
+        setLoading(false);
+        return;
+      }
+
       const activeExam = exams.find((e) => (e.exam_id || e.id) === selectedExamId);
       if (activeExam) {
         testDurationMinutes = activeExam.duration_minutes || 60;
@@ -272,11 +479,11 @@ export default function ExamPortal() {
               const subName = (subObj?.subtopic_name || '').toLowerCase();
               
               if (secNameLower.includes('english')) {
-                return subName.includes('cloze') || subName.includes('reading') || subName.includes('error') || subName.includes('vocab') || subName.includes('filler');
+                return subName.includes('cloze') || subName.includes('reading') || subName.includes('error') || subName.includes('vocab');
               } else if (secNameLower.includes('numerical') || secNameLower.includes('quant')) {
-                return subName.includes('approxi') || subName.includes('average') || subName.includes('series') || subName.includes('profit') || subName.includes('ratio') || subName.includes('simplif');
+                return subName.includes('approxi') || subName.includes('average') || subName.includes('series') || subName.includes('profit') || subName.includes('ratio');
               } else if (secNameLower.includes('reasoning')) {
-                return subName.includes('puzzle') || subName.includes('seating') || subName.includes('syllogism') || subName.includes('chart') || subName.includes('graph') || subName.includes('blood');
+                return subName.includes('puzzle') || subName.includes('seating') || subName.includes('syllogism') || subName.includes('blood');
               } else {
                 return false;
               }
@@ -345,7 +552,6 @@ export default function ExamPortal() {
           initialSectionTimes[sec.section_id] = sec.timeSec;
           const targetKey = sec.section_name.toLowerCase().split(' ')[0];
 
-          // Flexible match: checks subtopic name, category, or section name. If empty, takes general pool slice as fallback.
           let matchingSubs = allSubtopics?.filter(s => {
             const name = (s.subtopic_name || s.name || '').toLowerCase();
             const cat = (s.category || s.section_name || '').toLowerCase();
@@ -354,7 +560,6 @@ export default function ExamPortal() {
           
           let secQuestions = allQuestions.filter(q => matchingSubs.includes(q.subtopic_id));
           
-          // Fallback if specific category filter returns nothing so practice mode never locks up empty
           if (secQuestions.length === 0 && allQuestions.length > 0) {
             secQuestions = allQuestions;
           }
@@ -393,8 +598,44 @@ export default function ExamPortal() {
       }
       else {
         testDurationMinutes = 15;
-        const { data: qData } = await supabase.from('questions').select('*, passages(*)').eq('subtopic_id', selectedSubtopicId);
-        const loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
+        
+        const selectedSub = subtopics.find(s => (s.subtopic_id || s.id) === selectedSubtopicId);
+        const subName = (selectedSub?.subtopic_name || selectedSub?.name || '').toLowerCase();
+
+        let loadedQuestions = [];
+
+        if (subName.includes('testing') || subName.includes('di') || subName.includes('data interpretation')) {
+          const { data: diData } = await supabase.from('di_questions').select('*');
+          if (diData && diData.length > 0) {
+            loadedQuestions = diData.map((di) => {
+              let parsedOptions = [];
+              try {
+                parsedOptions = typeof di.options === 'string' ? JSON.parse(di.options) : di.options;
+              } catch (e) {
+                parsedOptions = [];
+              }
+
+              const formattedOptions = parsedOptions.map((optText, oIdx) => ({
+                id: `di_opt_${oIdx}`,
+                option_text: optText,
+                is_correct: oIdx === 1
+              }));
+
+              return {
+                ...di,
+                question_id: di.id,
+                question_text: di.question_text,
+                question_options: formattedOptions,
+                chart_data: typeof di.chart_data === 'string' ? JSON.parse(di.chart_data) : di.chart_data,
+                chart_categories: typeof di.chart_categories === 'string' ? JSON.parse(di.chart_categories) : di.chart_categories,
+                table_data: typeof di.table_data === 'string' ? JSON.parse(di.table_data) : di.table_data
+              };
+            });
+          }
+        } else {
+          const { data: qData } = await supabase.from('questions').select('*, passages(*)').eq('subtopic_id', selectedSubtopicId);
+          loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
+        }
 
         if (loadedQuestions.length === 0) {
           alert('No questions found for this topic.');
@@ -406,7 +647,7 @@ export default function ExamPortal() {
 
         const finalQuestions = loadedQuestions.map(q => {
           const qId = q[qIdKey];
-          const rawOpts = (allOptions || []).filter(o => {
+          const rawOpts = q.question_options || (allOptions || []).filter(o => {
             const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
             return optQId === String(qId).trim() || optQId === String(q.id).trim();
           });
@@ -418,7 +659,7 @@ export default function ExamPortal() {
           };
         });
 
-        setSections([{ section_id: 'PRACTICE', section_name: testMode }]);
+        setSections([{ section_id: 'PRACTICE', section_name: subName.includes('testing') ? 'Testing Module' : testMode }]);
         setSectionQuestionsMap({ PRACTICE: finalQuestions });
         setSectionTimeLefts({ PRACTICE: testDurationMinutes * 60 });
         setCompletedSections(new Set());
@@ -683,7 +924,6 @@ export default function ExamPortal() {
     return 'bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] hover:border-[oklch(0.94_0.21_118)]';
   };
 
-  // CONSTRUCTION STAGE VIEW
   if (stage === 'construction') {
     return (
       <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col items-center justify-center p-8 text-center space-y-4 font-sans">
@@ -703,18 +943,17 @@ export default function ExamPortal() {
     );
   }
 
-  // CONFIG STAGE
   if (stage === 'config') {
     const getSubtopicCategory = (sub) => {
       if (sub.category) return sub.category;
       if (sub.section_name) return sub.section_name;
       
       const name = (sub.subtopic_name || sub.name || '').toLowerCase();
-      if (name.includes('simplification') || name.includes('arithmetic') || name.includes('series') || name.includes('data interpretation') || name.includes('approximation') || name.includes('quadratic')) {
+      if (name.includes('simplification') || name.includes('arithmetic') || name.includes('series') || name.includes('data interpretation') || name.includes('approximation')) {
         return 'Numerical Ability';
-      } else if (name.includes('cloze') || name.includes('error') || name.includes('filler') || name.includes('reading') || name.includes('vocab') || name.includes('match')) {
+      } else if (name.includes('cloze') || name.includes('error') || name.includes('filler') || name.includes('reading') || name.includes('vocab')) {
         return 'English Language';
-      } else if (name.includes('puzzle') || name.includes('seating') || name.includes('syllogism') || name.includes('blood') || name.includes('direction')) {
+      } else if (name.includes('puzzle') || name.includes('seating') || name.includes('syllogism') || name.includes('blood')) {
         return 'Reasoning Ability';
       }
       return 'General Awareness / Other';
@@ -732,7 +971,6 @@ export default function ExamPortal() {
     return (
       <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col justify-center px-6 lg:px-20 py-12 relative overflow-hidden font-sans">
         
-        {/* Running Marquee Banner */}
         <div className="w-full bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold uppercase tracking-widest py-2.5 px-4 overflow-hidden whitespace-nowrap mb-12 rounded-xl shadow-[0_0_20px_rgba(204,255,0,0.2)]">
           <div className="inline-block animate-[marquee_25s_linear_infinite]">
             SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now! &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now!
@@ -741,7 +979,6 @@ export default function ExamPortal() {
 
         <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-12 items-center relative z-10">
           
-          {/* Hero Left */}
           <div className="lg:col-span-7 space-y-8">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-xs tracking-[0.15em] text-[oklch(0.68_0.04_265)] uppercase">
               <span className="w-2 h-2 rounded-full bg-[oklch(0.94_0.21_118)] animate-pulse"></span>
@@ -758,7 +995,6 @@ export default function ExamPortal() {
               </p>
             </div>
 
-            {/* Exam Tag Row with Links */}
             <div className="flex flex-wrap gap-2 pt-2 items-center font-mono text-xs">
               <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-wider mr-1">Grinders:</span>
               {['JEE', 'NEET', 'UPSC', 'SSC', 'CAT'].map((tag, i) => (
@@ -785,252 +1021,248 @@ export default function ExamPortal() {
             </div>
           </div>
 
-          {/* Hero Right: Live Daily Dilemma Preview Card */}
-          <div className="lg:col-span-5">
-            <div className="bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-6 sm:p-8 shadow-2xl relative space-y-6 group hover:border-[oklch(0.94_0.21_118)]/40 transition">
-              
-              <div className="flex justify-between items-center border-b border-white/10 pb-4">
-                <span className="font-mono text-xs uppercase tracking-[0.1em] text-[oklch(0.94_0.21_118)] font-bold">The Daily Dilemma: Challenge your choice</span>
-                <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[oklch(0.16_0.03_265)] border border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)] font-mono text-xs font-bold">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[oklch(0.94_0.21_118)] animate-ping"></span>
-                  0:{dilemmaTimer < 10 ? `0${dilemmaTimer}` : dilemmaTimer}
-                </div>
+          <div className="lg:col-span-5" id="session-config-section">
+            <div className="bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 space-y-6">
+              <div className="border-b border-white/10 pb-4">
+                <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold mb-1">Session Configuration</h3>
+                <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">Configure Your Battleground</h2>
               </div>
 
-              <div className="space-y-4">
-                <p className="text-sm sm:text-base font-semibold text-[oklch(0.96_0.012_265)] min-h-[48px]">
-                  {dilemmaQuestion ? cleanText(dilemmaQuestion.question_text) : 'Loading dilemma from separate table...'}
-                </p>
-
-                <div className="space-y-2.5 font-mono text-xs">
-                  {dilemmaOptions.length > 0 ? (
-                    dilemmaOptions.map((opt, oIdx) => {
-                      const optId = opt.option_id || opt.id;
-                      const isSelected = dilemmaSelectedIndex === oIdx;
-                      const isCorrect = opt.is_correct;
-
-                      let borderStyle = 'border-white/5 bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)]';
-                      if (dilemmaSubmitted) {
-                        if (isCorrect) {
-                          borderStyle = 'border-emerald-500 bg-emerald-500/20 text-emerald-300 font-bold';
-                        } else if (isSelected && !isCorrect) {
-                          borderStyle = 'border-rose-500 bg-rose-500/20 text-rose-300';
-                        }
-                      } else if (isSelected) {
-                        borderStyle = 'border-[oklch(0.94_0.21_118)] bg-[oklch(0.94_0.21_118)]/10 text-[oklch(0.96_0.012_265)] shadow-[0_0_15px_rgba(204,255,0,0.15)]';
-                      }
-
-                      return (
-                        <div
-                          key={optId}
-                          onClick={() => !dilemmaSubmitted && setDilemmaSelectedIndex(oIdx)}
-                          className={`p-3 rounded-xl border transition cursor-pointer flex justify-between items-center ${borderStyle}`}
-                        >
-                          <span>{String.fromCharCode(65 + oIdx)} — {cleanText(opt.option_text)}</span>
-                          {dilemmaSubmitted && isCorrect && <span className="text-emerald-400 font-bold">✓ CORRECT</span>}
-                          {!dilemmaSubmitted && isSelected && <span className="text-[oklch(0.94_0.21_118)] font-bold">SELECTED</span>}
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="p-3 text-center text-slate-500">Fetching options...</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="pt-2 flex items-center justify-between">
-                <button
-                  onClick={() => setDilemmaSubmitted(true)}
-                  disabled={dilemmaSelectedIndex === null || dilemmaSubmitted}
-                  className="px-4 py-2 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-wider font-extrabold rounded-xl shadow transition disabled:opacity-40 cursor-pointer"
-                >
-                  Submit Answer
-                </button>
-                {dilemmaSubmitted && (
-                  <button
-                    onClick={() => {
-                      setDilemmaSubmitted(false);
-                      setDilemmaSelectedIndex(null);
-                    }}
-                    className="font-mono text-[10px] uppercase tracking-wider text-[oklch(0.68_0.04_265)] hover:text-white underline cursor-pointer"
+              <div className="space-y-5 font-mono text-xs">
+                <div>
+                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Exam Blueprint</label>
+                  <select
+                    className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                    value={selectedExamId}
+                    onChange={(e) => setSelectedExamId(e.target.value)}
                   >
-                    Reset
-                  </button>
+                    {exams.length > 0 ? (
+                      exams.map((ex) => (
+                        <option key={ex.exam_id || ex.id} value={ex.exam_id || ex.id}>
+                          {cleanText(ex.exam_name || ex.name)}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No exams allocated to your account</option>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Execution Mode</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {[
+                      { id: 'Full-Length Mock', label: 'Full Mock' },
+                      { id: 'Time-Based Practice', label: 'Timed Sprint' },
+                      { id: 'Topic-Based', label: 'Topic Drill' }
+                    ].map((mode) => (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        onClick={() => setTestMode(mode.id)}
+                        className={`p-3.5 rounded-xl border text-center transition cursor-pointer uppercase font-bold tracking-wider ${
+                          testMode === mode.id
+                            ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
+                            : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
+                        }`}
+                      >
+                        {mode.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {testMode === 'Full-Length Mock' && (
+                  <div>
+                    <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Timer Protocol</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setMockTimingMode('strict')}
+                        className={`p-4 rounded-xl border text-left transition cursor-pointer ${
+                          mockTimingMode === 'strict'
+                            ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
+                            : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
+                        }`}
+                      >
+                        <span className="block uppercase font-bold text-xs tracking-wider">Strict Timer</span>
+                        <span className="text-[11px] opacity-75 font-sans mt-0.5 block">Locked module pacing</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMockTimingMode('liberal')}
+                        className={`p-4 rounded-xl border text-left transition cursor-pointer ${
+                          mockTimingMode === 'liberal'
+                            ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
+                            : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
+                        }`}
+                      >
+                        <span className="block uppercase font-bold text-xs tracking-wider">Liberal Timer</span>
+                        <span className="text-[11px] opacity-75 font-sans mt-0.5 block">Flexible navigation</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {testMode === 'Time-Based Practice' && (
+                  <div>
+                    <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Sprint Duration</label>
+                    <div className="grid grid-cols-4 gap-2.5">
+                      {[10, 15, 30, 45].map((mins) => (
+                        <button
+                          key={mins}
+                          type="button"
+                          onClick={() => setPracticeMinutes(mins)}
+                          className={`p-3 rounded-xl border text-center transition cursor-pointer font-bold ${
+                            Number(practiceMinutes) === mins
+                              ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
+                              : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
+                          }`}
+                        >
+                          {mins} MINS
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {testMode === 'Topic-Based' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Main Category</label>
+                      <select
+                        className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                        value={selectedMainCategory}
+                        onChange={(e) => {
+                          const newCat = e.target.value;
+                          setSelectedMainCategory(newCat);
+                          const matchingSubs = subtopics.filter(sub => (sub.category || sub.section_name || 'General') === newCat);
+                          if (matchingSubs.length > 0) {
+                            setSelectedSubtopicId(matchingSubs[0].subtopic_id || matchingSubs[0].id);
+                          }
+                        }}
+                      >
+                        {mainCategories.length > 0 ? (
+                          mainCategories.map((cat, idx) => (
+                            <option key={idx} value={cat}>{cleanText(cat)}</option>
+                          ))
+                        ) : (
+                          <option value="">No categories found</option>
+                        )}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Subtopic</label>
+                      <select
+                        className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                        value={selectedSubtopicId}
+                        onChange={(e) => setSelectedSubtopicId(e.target.value)}
+                      >
+                        {filteredSubtopics.length > 0 ? (
+                          filteredSubtopics.map((sub) => (
+                            <option key={sub.subtopic_id || sub.id} value={sub.subtopic_id || sub.id}>
+                              {cleanText(sub.subtopic_name || sub.name)}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="">No subtopics available</option>
+                        )}
+                      </select>
+                    </div>
+                  </div>
                 )}
               </div>
+
+              <button
+                onClick={startExam}
+                disabled={loading || exams.length === 0}
+                className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer disabled:opacity-50"
+              >
+                {loading ? 'BUILDING QUESTION BANK...' : exams.length === 0 ? 'NO EXAMS ALLOCATED TO YOU' : 'INITIALIZE MOCK SESSION →'}
+              </button>
             </div>
           </div>
 
         </div>
 
-        {/* Configuration Selector Modal/Box inline with Conditional Options */}
-        <div id="session-config-section" className="max-w-3xl mx-auto w-full mt-16 bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6 scroll-mt-24">
-          <div className="border-b border-white/10 pb-4">
-            <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold mb-1">Session Configuration</h3>
-            <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">Configure Your Battleground</h2>
+        <div className="max-w-3xl mx-auto w-full mt-16 bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
+          <div className="flex justify-between items-center border-b border-white/10 pb-4">
+            <span className="font-mono text-xs uppercase tracking-[0.1em] text-[oklch(0.94_0.21_118)] font-bold">The Daily Dilemma: Challenge your choice</span>
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[oklch(0.16_0.03_265)] border border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)] font-mono text-xs font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-[oklch(0.94_0.21_118)] animate-ping"></span>
+              0:{dilemmaTimer < 10 ? `0${dilemmaTimer}` : dilemmaTimer}
+            </div>
           </div>
 
-          <div className="space-y-5 font-mono text-xs">
-            <div>
-              <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Exam Blueprint</label>
-              <select
-                className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
-                value={selectedExamId}
-                onChange={(e) => setSelectedExamId(e.target.value)}
-              >
-                {exams.length > 0 ? (
-                  exams.map((ex) => (
-                    <option key={ex.exam_id || ex.id} value={ex.exam_id || ex.id}>
-                      {cleanText(ex.exam_name || ex.name)}
-                    </option>
-                  ))
-                ) : (
-                  <option value="">No exams allocated to your account</option>
-                )}
-              </select>
-            </div>
+          <div className="space-y-4">
+            <p className="text-sm sm:text-base font-semibold text-[oklch(0.96_0.012_265)] min-h-[48px]">
+              <MathText text={dilemmaQuestion ? dilemmaQuestion.question_text : 'Loading dilemma from separate table...'} />
+            </p>
 
-            <div>
-              <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Execution Mode</label>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {[
-                  { id: 'Full-Length Mock', label: 'Full Mock' },
-                  { id: 'Time-Based Practice', label: 'Timed Sprint' },
-                  { id: 'Topic-Based', label: 'Topic Drill' }
-                ].map((mode) => (
-                  <button
-                    key={mode.id}
-                    type="button"
-                    onClick={() => setTestMode(mode.id)}
-                    className={`p-3.5 rounded-xl border text-center transition cursor-pointer uppercase font-bold tracking-wider ${
-                      testMode === mode.id
-                        ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
-                        : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
-                    }`}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <div className="space-y-2.5 font-mono text-xs">
+              {dilemmaOptions.length > 0 ? (
+                dilemmaOptions.map((opt, oIdx) => {
+                  const optId = opt.option_id || opt.id;
+                  const isSelected = dilemmaSelectedIndex === oIdx;
+                  const isCorrect = opt.is_correct;
 
-            {testMode === 'Full-Length Mock' && (
-              <div>
-                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Timer Protocol</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setMockTimingMode('strict')}
-                    className={`p-4 rounded-xl border text-left transition cursor-pointer ${
-                      mockTimingMode === 'strict'
-                        ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
-                        : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
-                    }`}
-                  >
-                    <span className="block uppercase font-bold text-xs tracking-wider">Strict Timer</span>
-                    <span className="text-[11px] opacity-75 font-sans mt-0.5 block">Locked module pacing</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMockTimingMode('liberal')}
-                    className={`p-4 rounded-xl border text-left transition cursor-pointer ${
-                      mockTimingMode === 'liberal'
-                        ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
-                        : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
-                    }`}
-                  >
-                    <span className="block uppercase font-bold text-xs tracking-wider">Liberal Timer</span>
-                    <span className="text-[11px] opacity-75 font-sans mt-0.5 block">Flexible navigation</span>
-                  </button>
-                </div>
-              </div>
-            )}
+                  let borderStyle = 'border-white/5 bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)]';
+                  if (dilemmaSubmitted) {
+                    if (isCorrect) {
+                      borderStyle = 'border-emerald-500 bg-emerald-500/20 text-emerald-300 font-bold';
+                    } else if (isSelected && !isCorrect) {
+                      borderStyle = 'border-rose-500 bg-rose-500/20 text-rose-300';
+                    }
+                  } else if (isSelected) {
+                    borderStyle = 'border-[oklch(0.94_0.21_118)] bg-[oklch(0.94_0.21_118)]/10 text-[oklch(0.96_0.012_265)] shadow-[0_0_15px_rgba(204,255,0,0.15)]';
+                  }
 
-            {testMode === 'Time-Based Practice' && (
-              <div>
-                <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Sprint Duration (Eng: 30s/q | Num/Reas: 40s/q)</label>
-                <div className="grid grid-cols-4 gap-2.5">
-                  {[10, 15, 30, 45].map((mins) => (
-                    <button
-                      key={mins}
-                      type="button"
-                      onClick={() => setPracticeMinutes(mins)}
-                      className={`p-3 rounded-xl border text-center transition cursor-pointer font-bold ${
-                        Number(practiceMinutes) === mins
-                          ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
-                          : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
-                      }`}
+                  return (
+                    <div
+                      key={optId}
+                      onClick={() => !dilemmaSubmitted && setDilemmaSelectedIndex(oIdx)}
+                      className={`p-3 rounded-xl border transition cursor-pointer flex justify-between items-center ${borderStyle}`}
                     >
-                      {mins} MINS
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {testMode === 'Topic-Based' && (
-              <div className="space-y-4">
-                <div>
-                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Main Category</label>
-                  <select
-                    className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
-                    value={selectedMainCategory}
-                    onChange={(e) => {
-                      const newCat = e.target.value;
-                      setSelectedMainCategory(newCat);
-                      const matchingSubs = subtopics.filter(sub => (sub.category || sub.section_name || 'General') === newCat);
-                      if (matchingSubs.length > 0) {
-                        setSelectedSubtopicId(matchingSubs[0].subtopic_id || matchingSubs[0].id);
-                      }
-                    }}
-                  >
-                    {mainCategories.length > 0 ? (
-                      mainCategories.map((cat, idx) => (
-                        <option key={idx} value={cat}>{cleanText(cat)}</option>
-                      ))
-                    ) : (
-                      <option value="">No categories found</option>
-                    )}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Subtopic</label>
-                  <select
-                    className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
-                    value={selectedSubtopicId}
-                    onChange={(e) => setSelectedSubtopicId(e.target.value)}
-                  >
-                    {filteredSubtopics.length > 0 ? (
-                      filteredSubtopics.map((sub) => (
-                        <option key={sub.subtopic_id || sub.id} value={sub.subtopic_id || sub.id}>
-                          {cleanText(sub.subtopic_name || sub.name)}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">No subtopics available</option>
-                    )}
-                  </select>
-                </div>
-              </div>
-            )}
+                      <span>{String.fromCharCode(65 + oIdx)} — <MathText text={opt.option_text} /></span>
+                      {dilemmaSubmitted && isCorrect && <span className="text-emerald-400 font-bold">✓ CORRECT</span>}
+                      {!dilemmaSubmitted && isSelected && <span className="text-[oklch(0.94_0.21_118)] font-bold">SELECTED</span>}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="p-3 text-center text-slate-500">Fetching options...</div>
+              )}
+            </div>
           </div>
 
-          <button
-            onClick={startExam}
-            disabled={loading || exams.length === 0}
-            className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer disabled:opacity-50"
-          >
-            {loading ? 'BUILDING QUESTION BANK...' : exams.length === 0 ? 'NO EXAMS ALLOCATED TO YOU' : 'INITIALIZE MOCK SESSION →'}
-          </button>
+          <div className="pt-2 flex items-center justify-between">
+            <button
+              onClick={() => setDilemmaSubmitted(true)}
+              disabled={dilemmaSelectedIndex === null || dilemmaSubmitted}
+              className="px-4 py-2 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-wider font-extrabold rounded-xl shadow transition disabled:opacity-40 cursor-pointer"
+            >
+              Submit Answer
+            </button>
+            {dilemmaSubmitted && (
+              <button
+                onClick={() => {
+                  setDilemmaSubmitted(false);
+                  setDilemmaSelectedIndex(null);
+                }}
+                className="font-mono text-[10px] uppercase tracking-wider text-[oklch(0.68_0.04_265)] hover:text-white underline cursor-pointer"
+              >
+                Reset
+              </button>
+            )}
+          </div>
         </div>
 
       </div>
     );
   }
 
-  // EXAM STAGE HUD (Secured with .exam-active-container class)
-  if (stage === 'exam') {
+if (stage === 'exam') {
     const currentQList = getCurrentActiveQuestions();
     const currentQ = currentQList[currentIndex];
     const paletteCounts = getPaletteSummary();
@@ -1075,7 +1307,6 @@ export default function ExamPortal() {
           </div>
         </header>
 
-        {/* Module Switcher Row */}
         <div className="bg-[oklch(0.23_0.045_265)]/50 px-4 sm:px-8 py-2.5 flex items-center gap-2 border-b border-white/10 overflow-x-auto font-mono text-xs">
           <span className="text-[oklch(0.68_0.04_265)] uppercase font-bold tracking-[0.15em] mr-2 shrink-0">Modules:</span>
           {sections.map((sec, idx) => {
@@ -1108,63 +1339,74 @@ export default function ExamPortal() {
               <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Difficulty: {currentQ?.difficulty_level || 'Moderate'}</span>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 sm:p-10 space-y-6">
-              {!currentQ ? (
-                <div className="flex-1 flex flex-col items-center justify-center p-12 text-center font-mono text-xs my-auto">
-                  <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-6 rounded-2xl space-y-3 max-w-md mx-auto">
-                    <p className="text-[oklch(0.96_0.012_265)] font-bold uppercase tracking-wider">No Questions Deployed</p>
-                    <p className="text-[oklch(0.68_0.04_265)] leading-relaxed">
-                      There are no active questions loaded for <span className="text-[oklch(0.94_0.21_118)]">{cleanText(sections[activeSectionIndex]?.section_name)}</span>. Please use the Bulk Uploader to ingest a dataset for this module.
-                    </p>
-                  </div>
+            <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto">
+              {currentQ?.chart_data || currentQ?.table_data ? (
+                <div className="w-full lg:w-1/2 p-6 border-b lg:border-b-0 lg:border-r border-white/10 bg-[oklch(0.18_0.03_265)] flex flex-col justify-center">
+                  <h3 className="font-mono text-xs font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider mb-2">Data Interpretation</h3>
+                  <h2 className="text-xl font-bold mb-4">{currentQ.title}</h2>
+                  <DIChartRenderer 
+                    chartType={currentQ.chart_type} 
+                    categories={currentQ.chart_categories} 
+                    data={currentQ.chart_data} 
+                    tableData={currentQ.table_data}
+                  />
                 </div>
-              ) : (
-                <>
-                  {rawPassage && (
-                    <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-2xl p-6 text-sm text-[oklch(0.96_0.012_265)] space-y-2">
-                      <h4 className="font-mono text-xs uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] font-bold border-b border-white/10 pb-2">Reading Context / Passage</h4>
-                      <p className="leading-relaxed whitespace-pre-line font-sans">
-                        {cleanText(rawPassage)}
+              ) : rawPassage ? (
+                <div className={`w-full ${currentQ?.chart_data || currentQ?.table_data || rawPassage ? 'lg:w-1/2' : 'w-full'} p-6 sm:p-10 space-y-6 overflow-y-auto`}>
+                  <p className="leading-relaxed whitespace-pre-line font-sans"><MathText text={rawPassage} /></p>
+                </div>
+              ) : null}
+
+              <div className={`w-full ${currentQ?.chart_data || rawPassage ? 'lg:w-1/2' : 'w-full'} p-6 sm:p-10 space-y-6 overflow-y-auto`}>
+                {!currentQ ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-12 text-center font-mono text-xs my-auto">
+                    <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-6 rounded-2xl space-y-3 max-w-md mx-auto">
+                      <p className="text-[oklch(0.96_0.012_265)] font-bold uppercase tracking-wider">No Questions Deployed</p>
+                      <p className="text-[oklch(0.68_0.04_265)] leading-relaxed">
+                        There are no active questions loaded for <span className="text-[oklch(0.94_0.21_118)]">{cleanText(sections[activeSectionIndex]?.section_name)}</span>. Please check your database.
                       </p>
                     </div>
-                  )}
+                  </div>
+                ) : (
+                  <>
+                    {currentQ?.image_url && (
+                      <div className="flex justify-center bg-[oklch(0.23_0.045_265)] p-4 rounded-2xl border border-white/10">
+                        <img src={currentQ.image_url} alt="Question Graphic" className="max-h-64 object-contain rounded" />
+                      </div>
+                    )}
 
-                  {currentQ?.image_url && (
-                    <div className="flex justify-center bg-[oklch(0.23_0.045_265)] p-4 rounded-2xl border border-white/10">
-                      <img src={currentQ.image_url} alt="Question Graphic" className="max-h-64 object-contain rounded" />
+                    <div className="text-base sm:text-lg font-medium text-[oklch(0.96_0.012_265)] leading-relaxed font-sans">
+                      <MathText text={currentQ?.question_text} />
                     </div>
-                  )}
 
-                  <div className="text-base sm:text-lg font-medium text-[oklch(0.96_0.012_265)] leading-relaxed font-sans">
-                    {cleanText(currentQ?.question_text)}
-                  </div>
+                    <div className="space-y-3 pt-2">
+                      {currentQ?.question_options?.map((opt, oIndex) => {
+                        const optId = opt.option_id || opt.id;
+                        const isChecked = userAnswers[currentQ.question_id] === optId;
+                        return (
+                          <div
+                            key={optId}
+                            onClick={() => handleOptionSelect(optId)}
+                            className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
+                              isChecked
+                                ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.96_0.012_265)] shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]'
+                                : 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-[oklch(0.96_0.012_265)]'
+                            }`}
+                          >
+                            <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
+                              isChecked ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : 'bg-[oklch(0.16_0.03_265)] border-white/20 text-[oklch(0.96_0.012_265)]'
+                            }`}>
+                              {String.fromCharCode(65 + oIndex)}
+                            </span>
+                            <span className="text-sm font-medium font-sans"><MathText text={opt.option_text} /></span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
 
-                  <div className="space-y-3 pt-2">
-                    {currentQ?.question_options?.map((opt, oIndex) => {
-                      const optId = opt.option_id || opt.id;
-                      const isChecked = userAnswers[currentQ.question_id] === optId;
-                      return (
-                        <div
-                          key={optId}
-                          onClick={() => handleOptionSelect(optId)}
-                          className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
-                            isChecked
-                              ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.96_0.012_265)] shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]'
-                              : 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-[oklch(0.96_0.012_265)]'
-                          }`}
-                        >
-                          <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
-                            isChecked ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : 'bg-[oklch(0.16_0.03_265)] border-white/20 text-[oklch(0.96_0.012_265)]'
-                          }`}>
-                            {String.fromCharCode(65 + oIndex)}
-                          </span>
-                          <span className="text-sm font-medium font-sans">{cleanText(opt.option_text)}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
             </div>
 
             <div className="px-6 py-4 bg-[oklch(0.23_0.045_265)]/40 border-t border-white/10 flex flex-wrap items-center justify-between gap-4 font-mono">
@@ -1195,7 +1437,6 @@ export default function ExamPortal() {
             </div>
           </main>
 
-          {/* Question Grid Sidebar */}
           <aside className={`absolute lg:relative top-0 right-0 h-full w-full sm:w-80 bg-[oklch(0.23_0.045_265)] flex flex-col border-l border-white/10 z-40 transition-transform duration-300 ${isPaletteOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
             <div className="p-5 border-b border-white/10 bg-[oklch(0.16_0.03_265)]/50">
               <div className="flex justify-between items-center mb-3">
@@ -1248,7 +1489,6 @@ export default function ExamPortal() {
           </aside>
         </div>
 
-        {/* Submit Confirmation Modal */}
         {showSubmitConfirm && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
             <div className="bg-[oklch(0.23_0.045_265)] border border-white/15 rounded-3xl p-8 max-w-md w-full space-y-6 shadow-2xl text-[oklch(0.96_0.012_265)] font-mono">
@@ -1281,8 +1521,7 @@ export default function ExamPortal() {
     );
   }
 
-  // RESULTS STAGE
-  if (stage === 'result' && attemptResult) {
+ if (stage === 'result' && attemptResult) {
     let sectionStats = sections.map((sec) => {
       const secId = sec.section_id || sec.id;
       const qList = sectionQuestionsMap[secId] || [];
@@ -1349,7 +1588,6 @@ export default function ExamPortal() {
             </div>
           </div>
 
-          {/* Module breakdown */}
           <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl space-y-6">
             <h3 className="font-mono text-xs font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-[0.2em] border-b border-white/10 pb-3">Module-wise Precision & Weak Zones</h3>
 
@@ -1417,7 +1655,6 @@ export default function ExamPortal() {
     );
   }
 
-  // SOLUTIONS STAGE
   if (stage === 'solutions') {
     const allQs = Object.values(sectionQuestionsMap).flat();
 
@@ -1448,7 +1685,7 @@ export default function ExamPortal() {
                     <div className="flex items-center gap-3">
                       <span className="font-bold text-[oklch(0.96_0.012_265)]">Q.No. {idx + 1}</span>
                       <span className="text-[oklch(0.94_0.21_118)] bg-[oklch(0.16_0.03_265)] px-2.5 py-1 rounded-xl border border-white/10">
-                        ⏱️ {timeSpentSecs}s
+                        ⏱ {timeSpentSecs}s
                       </span>
                     </div>
                     <span className={`font-bold px-3 py-1 rounded-xl uppercase tracking-wider text-[11px] ${
@@ -1458,7 +1695,7 @@ export default function ExamPortal() {
                     </span>
                   </div>
 
-                  <p className="text-base font-medium font-sans">{cleanText(q.question_text)}</p>
+                  <p className="text-base font-medium font-sans"><MathText text={q.question_text} /></p>
 
                   <div className="space-y-2 font-mono text-xs">
                     {q.question_options?.map((opt, oIndex) => {
@@ -1472,7 +1709,7 @@ export default function ExamPortal() {
 
                       return (
                         <div key={optId} className={`p-3.5 rounded-2xl border flex items-center justify-between ${badgeStyle}`}>
-                          <span>({String.fromCharCode(65 + oIndex)}) {cleanText(opt.option_text)}</span>
+                          <span>({String.fromCharCode(65 + oIndex)}) <MathText text={opt.option_text} /></span>
                           <span className="font-bold tracking-wider">
                             {isStudentChoice && '[YOUR PICK] '}
                             {isRightChoice && '[CORRECT]'}
@@ -1485,7 +1722,7 @@ export default function ExamPortal() {
                   {q.solution_explanation && (
                     <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/10 font-mono text-xs space-y-1">
                       <span className="text-[oklch(0.94_0.21_118)] font-bold uppercase tracking-wider block">Solution Breakdown:</span>
-                      <p className="font-sans text-[oklch(0.68_0.04_265)] leading-relaxed">{cleanText(q.solution_explanation)}</p>
+                      <p className="font-sans text-[oklch(0.68_0.04_265)] leading-relaxed"><MathText text={q.solution_explanation} /></p>
                     </div>
                   )}
                 </div>
@@ -1496,43 +1733,6 @@ export default function ExamPortal() {
       </div>
     );
   }
-
-  // SWOT STAGE
-  let sectionStats = sections.map((sec) => {
-    const secId = sec.section_id || sec.id;
-    const qList = sectionQuestionsMap[secId] || [];
-    let correct = 0;
-    let incorrect = 0;
-    let unattempted = 0;
-    let totalTime = 0;
-
-    qList.forEach((q) => {
-      const studentAns = userAnswers[q.question_id];
-      const correctOpt = q.question_options?.find((o) => o.is_correct);
-      const correctOptId = correctOpt?.option_id || correctOpt?.id;
-      totalTime += questionTimers[q.question_id] || 0;
-
-      if (!studentAns) {
-        unattempted++;
-      } else if (studentAns === correctOptId) {
-        correct++;
-      } else {
-        incorrect++;
-      }
-    });
-
-    const attempted = correct + incorrect;
-    const accuracy = attempted > 0 ? Math.round((correct / attempted) * 100) : 0;
-    return {
-      name: sec.section_name,
-      total: qList.length,
-      correct,
-      incorrect,
-      unattempted,
-      accuracy,
-      totalTime
-    };
-  });
 
   if (stage === 'swot') {
     return (
@@ -1576,3 +1776,4 @@ export default function ExamPortal() {
 
   return null;
 }
+

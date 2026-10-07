@@ -16,6 +16,9 @@ export default function AdminCurriculumBuilder() {
   const [exams, setExams] = useState([]);
   const [selectedExamId, setSelectedExamId] = useState('');
   
+  // Subtopic weight percentage tracking state
+  const [subWeights, setSubWeights] = useState({});
+  
   // Master elements palette
   const [availableCategories, setAvailableCategories] = useState([
     { id: 'cat_num', name: 'Numerical Ability' },
@@ -47,6 +50,44 @@ export default function AdminCurriculumBuilder() {
   const [editDuration, setEditDuration] = useState(60);
   const [editSections, setEditSections] = useState([]);
 
+  // Auto-balancing proportional slider weight handler
+  // Auto-balancing proportional slider weight handler with explicit 100% boundary locking
+// 1. Updated handleWeightChange function with strict boundary locking and normalization
+const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
+  const targetVal = Math.max(0, Math.min(100, Number(newPercentage)));
+  const updatedWeights = { ...subWeights, [changedSubId]: targetVal };
+
+  const otherSubIds = categorySubtopics.map(s => s.id).filter(sId => sId !== changedSubId);
+
+  if (targetVal === 100) {
+    otherSubIds.forEach(sId => {
+      updatedWeights[sId] = 0;
+    });
+  } else if (otherSubIds.length > 0) {
+    const remainingPool = 100 - targetVal;
+    const defaultShare = remainingPool / otherSubIds.length;
+    const currentOtherSum = otherSubIds.reduce((sum, sId) => sum + (subWeights[sId] !== undefined ? subWeights[sId] : defaultShare), 0);
+
+    otherSubIds.forEach(sId => {
+      const oldVal = subWeights[sId] !== undefined ? subWeights[sId] : defaultShare;
+      if (currentOtherSum > 0) {
+        updatedWeights[sId] = Number(((oldVal / currentOtherSum) * remainingPool).toFixed(1));
+      } else {
+        updatedWeights[sId] = Number(defaultShare.toFixed(1));
+      }
+    });
+
+    // Final precision correction check to ensure sum equals exactly 100%
+    const totalSum = targetVal + otherSubIds.reduce((sum, sId) => sum + updatedWeights[sId], 0);
+    if (totalSum !== 100) {
+      const diff = Number((100 - totalSum).toFixed(1));
+      updatedWeights[otherSubIds[0]] = Math.max(0, Number((updatedWeights[otherSubIds[0]] + diff).toFixed(1)));
+    }
+  }
+
+  setSubWeights(updatedWeights);
+};
+
   // Fetch initial data from Supabase
   const fetchBlueprintData = async () => {
     setLoading(true);
@@ -77,7 +118,6 @@ export default function AdminCurriculumBuilder() {
       }
 
       if (subtopicsData && subtopicsData.length > 0) {
-        // Merge DB subtopics with default ones if needed
         const dbSubs = subtopicsData.map(s => ({
           id: s.subtopic_id || s.id,
           name: s.subtopic_name || s.name,
@@ -106,7 +146,6 @@ export default function AdminCurriculumBuilder() {
       const secId = sec.section_id || sec.id;
       const secName = (sec.section_name || '').toLowerCase();
       
-      // Match subtopics linked via section_id or category text
       const matchedSubs = availableSubtopics.filter(sub => {
         const subCat = (sub.category || '').toLowerCase();
         return sub.section_id === secId || subCat.includes(secName.split(' ')[0]);
@@ -170,7 +209,6 @@ export default function AdminCurriculumBuilder() {
   const handleSaveBlueprint = async () => {
     setLoading(true);
     try {
-      // Clear old sections for this exam and re-insert current tree layout
       await supabase.from('exam_sections').delete().eq('exam_id', selectedExamId);
 
       for (const cat of examTree) {
@@ -188,7 +226,6 @@ export default function AdminCurriculumBuilder() {
         ]);
         if (secErr) throw secErr;
 
-        // Update subtopics mapping in DB
         if (cat.subtopics && cat.subtopics.length > 0) {
           const subIds = cat.subtopics.map(s => s.id);
           await supabase
@@ -422,29 +459,56 @@ export default function AdminCurriculumBuilder() {
                         </button>
                       </div>
 
-                      {/* Tier 3 Container: Subtopics */}
-                      <div className="space-y-2 min-h-[70px] p-2 bg-white/5 rounded-xl border border-dashed border-white/10">
-                        {cat.subtopics.length === 0 ? (
-                          <div className="text-center py-4 text-[oklch(0.68_0.04_265)] text-[11px] italic">
-                            Drop subtopics here
-                          </div>
-                        ) : (
-                          cat.subtopics.map((sub, sIdx) => (
-                            <div
-                              key={sIdx}
-                              className="flex justify-between items-center p-2.5 rounded-lg bg-[oklch(0.23_0.045_265)] border border-white/10 text-[oklch(0.96_0.012_265)]"
-                            >
-                              <span>↳ 📄 {sub.name}</span>
-                              <button
-                                onClick={() => removeItem(cIdx, sIdx)}
-                                className="text-rose-400 hover:text-rose-300 text-[10px] cursor-pointer"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ))
-                        )}
-                      </div>
+                      {/* Tier 3 Container: Subtopics with Percentage Sliders */}
+                      {/* Tier 3 Container: Subtopics with Percentage Sliders */}
+<div className="space-y-2.5 min-h-[70px] p-2 bg-white/5 rounded-xl border border-dashed border-white/10">
+  {cat.subtopics.length === 0 ? (
+    <div className="text-center py-4 text-[oklch(0.68_0.04_265)] text-[11px] italic">
+      Drop subtopics here
+    </div>
+  ) : (
+    cat.subtopics.map((sub, sIdx) => {
+      const sId = sub.id;
+      // Ensure equal initial distribution if state isn't set yet
+      const defaultVal = Math.round(100 / cat.subtopics.length);
+      const currentWeight = subWeights[sId] !== undefined ? subWeights[sId] : defaultVal;
+
+      return (
+        <div
+          key={sId}
+          className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-3 rounded-xl space-y-2"
+        >
+          <div className="flex justify-between items-center">
+            <span className="font-bold text-[oklch(0.96_0.012_265)]">↳ 📄 {sub.name}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[oklch(0.94_0.21_118)] font-extrabold px-2 py-0.5 bg-[oklch(0.94_0.21_118)]/10 rounded-lg text-xs">
+                {currentWeight}%
+              </span>
+              <button
+                onClick={() => removeItem(cIdx, sIdx)}
+                className="text-rose-400 hover:text-rose-300 text-[10px] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              step="1"
+              value={currentWeight}
+              onChange={(e) => handleWeightChange(sId, e.target.value, cat.subtopics)}
+              className="w-full accent-[oklch(0.94_0.21_118)] cursor-pointer h-1.5 bg-white/10 rounded-lg"
+            />
+          </div>
+        </div>
+      );
+    })
+  )}
+</div>
                     </div>
                   ))}
                 </div>
