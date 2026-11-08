@@ -3,10 +3,10 @@ import { supabase } from '../supabaseClient';
 import katex from 'katex';
 import ReactApexChart from 'react-apexcharts';
 
-// Inline chart renderer for Data Interpretation questions
-function DIChartRenderer({ chartType, categories, data, tableData }) {
+function DIChartRenderer({ chartType, categories, data, tableData, theme }) {
   const isLine = chartType === 'line';
   const isPie = chartType === 'pie' || chartType === 'donut';
+  const isDark = theme === 'dark';
 
   let parsedTable = tableData;
   if (typeof tableData === 'string') {
@@ -23,14 +23,14 @@ function DIChartRenderer({ chartType, categories, data, tableData }) {
       background: 'transparent',
       type: chartType || 'bar'
     },
-    theme: { mode: 'dark' },
-    colors: ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#38bdf8'],
+    theme: { mode: isDark ? 'dark' : 'light' },
+    colors: ['#6366f1', '#2563eb', '#10b981', '#f59e0b', '#ec4899'],
     ...(isPie ? {
       labels: categories || [],
-      legend: { position: 'bottom', labels: { colors: '#fff' } }
+      legend: { position: 'bottom', labels: { colors: isDark ? '#fff' : '#0f172a' } }
     } : {
-      xaxis: { categories: categories || [], labels: { style: { colors: '#94a3b8' } } },
-      yaxis: { labels: { style: { colors: '#94a3b8' } } },
+      xaxis: { categories: categories || [], labels: { style: { colors: isDark ? '#94a3b8' : '#64748b' } } },
+      yaxis: { labels: { style: { colors: isDark ? '#94a3b8' : '#64748b' } } },
       ...(isLine ? {
         stroke: { curve: 'smooth', width: 3 },
         markers: { size: 5 }
@@ -39,26 +39,23 @@ function DIChartRenderer({ chartType, categories, data, tableData }) {
   };
 
   const chartSeries = isPie ? (data || []) : [{ name: 'Values', data: data || [] }];
-  
-  // Check if we have valid chart data to display
   const hasChartData = data && Array.isArray(data) && data.length > 0;
 
   return (
     <div className="space-y-4 w-full">
-      {/* Tailwind CSS UI Table */}
       {parsedTable && parsedTable.headers && parsedTable.rows ? (
-        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/80 shadow-lg">
-          <table className="w-full text-left text-xs font-mono text-slate-200">
-            <thead className="bg-slate-900 text-indigo-400 uppercase tracking-wider border-b border-slate-800">
+        <div className={`overflow-x-auto rounded-xl border shadow-xs ${isDark ? 'border-slate-800 bg-slate-950/80 text-slate-200' : theme === 'light-mono' ? 'border-2 border-black bg-white text-black' : 'border-slate-200 bg-white text-slate-800'}`}>
+          <table className="w-full text-left text-xs font-mono">
+            <thead className={`uppercase tracking-wider border-b ${isDark ? 'bg-slate-900 text-indigo-400 border-slate-800' : theme === 'light-mono' ? 'bg-neutral-100 text-black border-b-2 border-black' : 'bg-slate-100 text-blue-600 border-slate-200'}`}>
               <tr>
                 {parsedTable.headers.map((header, idx) => (
                   <th key={idx} className="px-3 py-2.5 font-bold">{header}</th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/60">
+            <tbody className={`divide-y ${isDark ? 'divide-slate-800/60' : theme === 'light-mono' ? 'divide-black' : 'divide-slate-200'}`}>
               {parsedTable.rows.map((row, rIdx) => (
-                <tr key={rIdx} className="hover:bg-slate-900/50 transition-colors">
+                <tr key={rIdx} className={`transition-colors ${isDark ? 'hover:bg-slate-900/50' : 'hover:bg-slate-50'}`}>
                   {row.map((cell, cIdx) => (
                     <td key={cIdx} className="px-3 py-2 font-sans">{cell}</td>
                   ))}
@@ -69,9 +66,8 @@ function DIChartRenderer({ chartType, categories, data, tableData }) {
         </div>
       ) : null}
 
-      {/* ApexCharts Graph - Rendered ONLY if chart data exists */}
       {hasChartData && (
-        <div className="bg-slate-900 p-3 rounded-xl border border-slate-800 shadow-lg w-full flex justify-center items-center">
+        <div className={`p-3 rounded-xl border shadow-xs w-full flex justify-center items-center ${isDark ? 'bg-slate-900 border-slate-800' : theme === 'light-mono' ? 'border-2 border-black bg-white' : 'bg-white border-slate-200'}`}>
           <ReactApexChart 
             options={chartOptions} 
             series={chartSeries} 
@@ -94,31 +90,6 @@ const shuffleArray = (array) => {
   return shuffled;
 };
 
-const handleWeightChange = (changedSubId, newPercentage, categorySubtopics, allWeights, setAllWeights) => {
-  const targetVal = Math.max(0, Math.min(100, Number(newPercentage)));
-  const updatedWeights = { ...allWeights, [changedSubId]: targetVal };
-
-  const otherSubs = categorySubtopics.filter(s => (s.id || s.subtopic_id) !== changedSubId);
-  
-  if (otherSubs.length > 0) {
-    const remainingPool = 100 - targetVal;
-    const currentOtherSum = otherSubs.reduce((sum, s) => sum + (allWeights[s.id || s.subtopic_id] || 0), 0);
-
-    otherSubs.forEach(s => {
-      const sId = s.id || s.subtopic_id;
-      const oldVal = allWeights[sId] || 0;
-      if (currentOtherSum > 0) {
-        updatedWeights[sId] = Number(((oldVal / currentOtherSum) * remainingPool).toFixed(1));
-      } else {
-        updatedWeights[sId] = Number((remainingPool / otherSubs.length).toFixed(1));
-      }
-    });
-  }
-
-  setAllWeights(updatedWeights);
-};
-
-// Text cleaner to remove Excel/UTF-8 encoding artifacts
 const cleanText = (text) => {
   if (!text) return '';
   return String(text)
@@ -139,7 +110,8 @@ function MathText({ text }) {
     processed = processed.replace(/\\\[([\s\S]*?)\\\]/g, (m, f) => `$$${f.trim()}$$`);
 
     while (processed.includes('\\(') && processed.includes('\\)')) {
-      const startIndex = processed.indexOf('\\(');       const endIndex = processed.indexOf('\\)', startIndex);
+      const startIndex = processed.indexOf('\\(');
+      const endIndex = processed.indexOf('\\)', startIndex);
       if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
         const formula = processed.substring(startIndex + 2, endIndex);
         try {
@@ -175,12 +147,11 @@ function MathText({ text }) {
   return <span className="break-words" dangerouslySetInnerHTML={{ __html: htmlContent }} />;
 }
 
-export default function ExamPortal() {
+export default function ExamPortal({ theme = 'dark' }) {
   const [stage, setStage] = useState('config'); // 'config' | 'exam' | 'result' | 'solutions' | 'swot' | 'construction'
   const [exams, setExams] = useState([]);
   const [subtopics, setSubtopics] = useState([]);
   const [constructionTitle, setConstructionTitle] = useState('');
-  const [subWeights, setSubWeights] = useState({});
   
   const [selectedExamId, setSelectedExamId] = useState('');
   const [testMode, setTestMode] = useState('Full-Length Mock'); 
@@ -214,7 +185,8 @@ export default function ExamPortal() {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
 
-  const [diQuestionsList, setDiQuestionsList] = useState([]);
+  const isDark = theme === 'dark';
+  const isMono = theme === 'light-mono';
 
   useEffect(() => {
     window.scrollToConfigSection = () => {
@@ -231,8 +203,8 @@ export default function ExamPortal() {
 
     window.history.pushState(null, '', window.location.href);
 
-    const handlePopState = (e) => {
-      const confirmLeave = window.confirm("⚠️️ Active Exam Warning: You cannot leave this page until you submit your test. Are you sure you want to terminate your session?");
+    const handlePopState = () => {
+      const confirmLeave = window.confirm("⚠️ Active Exam Warning: You cannot leave this page until you submit your test. Are you sure you want to terminate your session?");
       if (confirmLeave) {
         setStage('config');
       } else {
@@ -365,68 +337,6 @@ export default function ExamPortal() {
     let testDurationMinutes = 60;
 
     try {
-      let diData = null;
-      if (testMode === 'Topic-Based') {
-        const selectedSub = subtopics.find(s => (s.subtopic_id || s.id) === selectedSubtopicId);
-        const subName = (selectedSub?.subtopic_name || selectedSub?.name || '').toLowerCase();
-        
-        if (subName.includes('data interpretation') || subName.includes('di')) {
-          const { data } = await supabase.from('di_questions').select('*');
-          diData = data;
-        }
-      }
-
-      if (diData && diData.length > 0) {
-        const formattedDiList = diData.map((di) => {
-          let parsedOptions = [];
-          try {
-            parsedOptions = typeof di.options === 'string' ? JSON.parse(di.options) : di.options;
-          } catch (e) {
-            parsedOptions = [];
-          }
-
-          const formattedOptions = parsedOptions.map((optText, oIdx) => ({
-            id: `di_opt_${oIdx}`,
-            option_text: optText,
-            is_correct: oIdx === 1
-          }));
-
-          let parsedTableData = di.table_data;
-          if (!parsedTableData && di.passage_text && di.passage_text.trim().startsWith('{')) {
-            try {
-              parsedTableData = JSON.parse(di.passage_text);
-            } catch (e) {
-              parsedTableData = null;
-            }
-          }
-
-          return {
-            ...di,
-            question_id: di.id,
-            question_text: di.question_text,
-            question_options: formattedOptions,
-            chart_data: typeof di.chart_data === 'string' ? JSON.parse(di.chart_data) : di.chart_data,
-            chart_categories: typeof di.chart_categories === 'string' ? JSON.parse(di.chart_categories) : di.chart_categories,
-            table_data: parsedTableData
-          };
-        });
-
-        setDiQuestionsList(formattedDiList);
-        setSections([{ section_id: 'DI_SECTION', section_name: 'Data Interpretation' }]);
-        setSectionQuestionsMap({ DI_SECTION: formattedDiList });
-        setSectionTimeLefts({ DI_SECTION: 900 });
-        setActiveSectionIndex(0);
-        setCurrentIndex(0);
-        setTimeLeft(900);
-        setUserAnswers({});
-        setQuestionTimers({});
-        setReviewStatus({});
-        setVisitedQuestions(new Set([formattedDiList[0]?.question_id]));
-        setStage('exam');
-        setLoading(false);
-        return;
-      }
-
       const activeExam = exams.find((e) => (e.exam_id || e.id) === selectedExamId);
       if (activeExam) {
         testDurationMinutes = activeExam.duration_minutes || 60;
@@ -597,6 +507,7 @@ export default function ExamPortal() {
         setStage('exam');
       }
       else {
+        // Topic-Based Drill
         testDurationMinutes = 15;
         
         const selectedSub = subtopics.find(s => (s.subtopic_id || s.id) === selectedSubtopicId);
@@ -604,7 +515,8 @@ export default function ExamPortal() {
 
         let loadedQuestions = [];
 
-        if (subName.includes('testing') || subName.includes('di') || subName.includes('data interpretation')) {
+        // STRICT CHECK: Only load DI table if subtopic explicitly equals Data Interpretation (removed "testing")
+        if (subName === 'data interpretation (di)' || subName === 'di') {
           const { data: diData } = await supabase.from('di_questions').select('*');
           if (diData && diData.length > 0) {
             loadedQuestions = diData.map((di) => {
@@ -633,12 +545,18 @@ export default function ExamPortal() {
             });
           }
         } else {
-          const { data: qData } = await supabase.from('questions').select('*, passages(*)').eq('subtopic_id', selectedSubtopicId);
+          // STRICT SUBTOPIC FILTERING: Query standard questions table using exact selectedSubtopicId
+          const { data: qData, error: qErr } = await supabase
+            .from('questions')
+            .select('*, passages(*)')
+            .eq('subtopic_id', selectedSubtopicId);
+
+          if (qErr) throw qErr;
           loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
         }
 
         if (loadedQuestions.length === 0) {
-          alert('No questions found for this topic.');
+          alert('No questions found for this specific subtopic in the database.');
           setLoading(false);
           return;
         }
@@ -659,7 +577,9 @@ export default function ExamPortal() {
           };
         });
 
-        setSections([{ section_id: 'PRACTICE', section_name: subName.includes('testing') ? 'Testing Module' : testMode }]);
+        const moduleDisplayName = selectedSub?.subtopic_name || selectedSub?.name || testMode;
+
+        setSections([{ section_id: 'PRACTICE', section_name: moduleDisplayName }]);
         setSectionQuestionsMap({ PRACTICE: finalQuestions });
         setSectionTimeLefts({ PRACTICE: testDurationMinutes * 60 });
         setCompletedSections(new Set());
@@ -918,24 +838,24 @@ export default function ExamPortal() {
     const isVisited = visitedQuestions.has(qId);
 
     if (isAnswered && isMarked) return 'bg-purple-600 text-white ring-2 ring-purple-300';
-    if (isMarked) return 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-bold';
+    if (isMarked) return isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-bold' : isMono ? 'bg-black text-white font-bold' : 'bg-red-600 text-white font-bold';
     if (isAnswered) return 'bg-emerald-600 text-white';
     if (isVisited) return 'bg-rose-500 text-white';
-    return 'bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] hover:border-[oklch(0.94_0.21_118)]';
+    return isDark ? 'bg-[oklch(0.23_0.045_265)] text-[oklch(0.68_0.04_265)] border border-white/5' : isMono ? 'bg-white text-black border-2 border-black' : 'bg-slate-100 text-slate-700 hover:border-red-600 border border-slate-200';
   };
 
   if (stage === 'construction') {
     return (
-      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col items-center justify-center p-8 text-center space-y-4 font-sans">
-        <h1 className="text-3xl sm:text-5xl font-extrabold font-['Archivo_Black'] text-[oklch(0.94_0.21_118)]">
+      <div className={`flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4 font-sans ${isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)]' : isMono ? 'bg-white text-black' : 'bg-slate-50 text-slate-900'}`}>
+        <h1 className={`text-3xl sm:text-5xl font-extrabold ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>
           {cleanText(constructionTitle)} Under Construction
         </h1>
-        <p className="font-mono text-sm text-[oklch(0.68_0.04_265)] uppercase tracking-wider">
+        <p className={`font-mono text-sm uppercase tracking-wider ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'opacity-70'}`}>
           We are building something awesome. Check back soon!
         </p>
         <button 
           onClick={() => setStage('config')}
-          className="mt-4 px-6 py-3 bg-[oklch(0.23_0.045_265)] hover:bg-[oklch(0.23_0.045_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-widest rounded-xl transition cursor-pointer"
+          className={`mt-4 px-6 py-3 font-mono text-xs uppercase tracking-widest rounded-full transition cursor-pointer border ${isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 hover:bg-white/5 text-white' : isMono ? 'bg-white border-2 border-black text-black font-bold' : 'bg-white border-slate-300 hover:bg-slate-100 shadow-xs'}`}
         >
           ← Return to Config
         </button>
@@ -953,7 +873,7 @@ export default function ExamPortal() {
         return 'Numerical Ability';
       } else if (name.includes('cloze') || name.includes('error') || name.includes('filler') || name.includes('reading') || name.includes('vocab')) {
         return 'English Language';
-      } else if (name.includes('puzzle') || name.includes('seating') || name.includes('syllogism') || name.includes('blood')) {
+      } else if (name.includes('puzzle') || name.includes('seating') || name.includes('syllogism') || name.includes('blood') || name.includes('testing')) {
         return 'Reasoning Ability';
       }
       return 'General Awareness / Other';
@@ -969,9 +889,13 @@ export default function ExamPortal() {
     });
 
     return (
-      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] flex flex-col justify-center px-6 lg:px-20 py-12 relative overflow-hidden font-sans">
+      <div className={`flex-1 flex flex-col justify-center px-6 lg:px-20 py-12 relative overflow-hidden font-sans transition-colors duration-200 ${
+        isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)]' : isMono ? 'bg-white text-black' : 'bg-slate-50 text-slate-900'
+      }`}>
         
-        <div className="w-full bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold uppercase tracking-widest py-2.5 px-4 overflow-hidden whitespace-nowrap mb-12 rounded-xl shadow-[0_0_20px_rgba(204,255,0,0.2)]">
+        <div className={`w-full font-mono text-xs font-bold uppercase tracking-widest py-2.5 px-4 overflow-hidden whitespace-nowrap mb-12 rounded-2xl shadow-xs ${
+          isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_20px_rgba(204,255,0,0.25)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-slate-950 text-white shadow-xs'
+        }`}>
           <div className="inline-block animate-[marquee_25s_linear_infinite]">
             SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now! &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now!
           </div>
@@ -980,23 +904,25 @@ export default function ExamPortal() {
         <div className="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-12 items-center relative z-10">
           
           <div className="lg:col-span-7 space-y-8">
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-xs tracking-[0.15em] text-[oklch(0.68_0.04_265)] uppercase">
-              <span className="w-2 h-2 rounded-full bg-[oklch(0.94_0.21_118)] animate-pulse"></span>
-             The Daily Dilemma: 1 minute, 1 moral choice, endless perspectives
+            <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border font-mono text-xs shadow-xs ${
+              isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-[oklch(0.68_0.04_265)]' : isMono ? 'bg-white border-2 border-black text-black font-bold' : 'bg-white border-slate-200 text-slate-600'
+            }`}>
+              <span className={`w-2 h-2 rounded-full animate-pulse ${isDark ? 'bg-[oklch(0.94_0.21_118)]' : isMono ? 'bg-black' : 'bg-red-600'}`}></span>
+              The Daily Dilemma: 1 minute, 1 moral choice, endless perspectives
             </div>
 
             <div className="space-y-2">
-              <h1 className="text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight font-['Archivo_Black'] leading-[1.05]">
+              <h1 className={`text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight leading-[1.05] ${isDark ? 'text-white' : 'text-slate-950'}`}>
                 Beat the clock.<br />
-                <span className="text-[oklch(0.94_0.21_118)] drop-shadow-[0_0_30px_rgba(204,255,0,0.3)]">Own the rank.</span>
+                <span className={isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'underline' : 'text-red-600'}>Own the rank.</span>
               </h1>
-              <p className="text-sm sm:text-base text-[oklch(0.68_0.04_265)] font-sans max-w-xl leading-relaxed pt-2">
+              <p className={`text-sm sm:text-base font-sans max-w-xl leading-relaxed pt-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : isMono ? 'text-black font-medium' : 'text-slate-600'}`}>
                 Students who consistently practice with mock tests outperform passive learners by an average of 15 to 25 percentage points.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2 pt-2 items-center font-mono text-xs">
-              <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-wider mr-1">Grinders:</span>
+              <span className={`uppercase tracking-wider mr-1 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-500'}`}>Grinders:</span>
               {['JEE', 'NEET', 'UPSC', 'SSC', 'CAT'].map((tag, i) => (
                 <button
                   key={i}
@@ -1004,7 +930,13 @@ export default function ExamPortal() {
                     setConstructionTitle(tag);
                     setStage('construction');
                   }}
-                  className="px-3 py-1 rounded-lg bg-[oklch(0.23_0.045_265)] border border-white/10 font-mono text-[11px] uppercase tracking-[0.15em] text-[oklch(0.94_0.21_118)] hover:bg-[oklch(0.94_0.21_118)] hover:text-[oklch(0.16_0.03_265)] transition cursor-pointer font-bold"
+                  className={`px-3.5 py-1.5 rounded-full border font-mono text-[11px] uppercase tracking-[0.15em] transition cursor-pointer font-bold shadow-xs ${
+                    isDark 
+                      ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-[oklch(0.94_0.21_118)] hover:bg-[oklch(0.94_0.21_118)] hover:text-[oklch(0.16_0.03_265)]' 
+                      : isMono
+                      ? 'bg-white border-2 border-black text-black hover:bg-black hover:text-white'
+                      : 'bg-white border-slate-200 text-slate-700 hover:border-red-600 hover:text-red-600'
+                  }`}
                 >
                   {tag}
                 </button>
@@ -1014,7 +946,13 @@ export default function ExamPortal() {
                   const configElement = document.getElementById('session-config-section');
                   if (configElement) configElement.scrollIntoView({ behavior: 'smooth' });
                 }}
-                className="px-3 py-1 rounded-lg bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-[11px] uppercase tracking-[0.15em] hover:brightness-110 transition cursor-pointer font-extrabold shadow-[0_0_10px_rgba(204,255,0,0.2)]"
+                className={`px-4 py-1.5 rounded-full font-mono text-[11px] uppercase tracking-[0.15em] transition cursor-pointer font-extrabold shadow-sm ${
+                  isDark 
+                    ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] hover:brightness-110 shadow-[0_0_15px_rgba(204,255,0,0.2)]' 
+                    : isMono
+                    ? 'bg-black text-white border-2 border-black hover:bg-neutral-800'
+                    : 'bg-red-600 text-white hover:bg-red-700'
+                }`}
               >
                 SBI →
               </button>
@@ -1022,17 +960,25 @@ export default function ExamPortal() {
           </div>
 
           <div className="lg:col-span-5" id="session-config-section">
-            <div className="bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-6 sm:p-8 shadow-2xl relative z-10 space-y-6">
-              <div className="border-b border-white/10 pb-4">
-                <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold mb-1">Session Configuration</h3>
-                <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight">Configure Your Battleground</h2>
+            <div className={`border rounded-3xl p-6 sm:p-8 shadow-xl relative z-10 space-y-6 transition-colors duration-200 ${
+              isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 text-slate-900'
+            }`}>
+              <div className={`border-b pb-4 ${isDark ? 'border-white/10' : isMono ? 'border-black' : 'border-slate-200'}`}>
+                <h3 className={`font-mono text-xs uppercase tracking-[0.2em] font-bold mb-1 ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>Session Configuration</h3>
+                <h2 className={`text-xl font-black tracking-tight ${isDark ? 'text-white' : 'text-slate-950'}`}>Configure Your Battleground</h2>
               </div>
 
               <div className="space-y-5 font-mono text-xs">
                 <div>
-                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Exam Blueprint</label>
+                  <label className={`block uppercase tracking-[0.15em] mb-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-700'}`}>Select Target Exam Blueprint</label>
                   <select
-                    className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                    className={`w-full border rounded-2xl p-4 text-sm transition cursor-pointer focus:outline-none ${
+                      isDark 
+                        ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-white focus:border-[oklch(0.94_0.21_118)]' 
+                        : isMono
+                        ? 'bg-white border-2 border-black text-black'
+                        : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-red-600'
+                    }`}
                     value={selectedExamId}
                     onChange={(e) => setSelectedExamId(e.target.value)}
                   >
@@ -1049,7 +995,7 @@ export default function ExamPortal() {
                 </div>
 
                 <div>
-                  <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Execution Mode</label>
+                  <label className={`block uppercase tracking-[0.15em] mb-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-700'}`}>Execution Mode</label>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     {[
                       { id: 'Full-Length Mock', label: 'Full Mock' },
@@ -1060,10 +1006,10 @@ export default function ExamPortal() {
                         key={mode.id}
                         type="button"
                         onClick={() => setTestMode(mode.id)}
-                        className={`p-3.5 rounded-xl border text-center transition cursor-pointer uppercase font-bold tracking-wider ${
+                        className={`p-3.5 rounded-2xl border text-center transition cursor-pointer uppercase font-bold tracking-wider ${
                           testMode === mode.id
-                            ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
-                            : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
+                            ? (isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-600 text-white border-red-600 shadow-sm')
+                            : (isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-white' : isMono ? 'bg-white text-black border-2 border-black hover:bg-neutral-100' : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100')
                         }`}
                       >
                         {mode.label}
@@ -1074,15 +1020,15 @@ export default function ExamPortal() {
 
                 {testMode === 'Full-Length Mock' && (
                   <div>
-                    <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Timer Protocol</label>
+                    <label className={`block uppercase tracking-[0.15em] mb-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-700'}`}>Timer Protocol</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <button
                         type="button"
                         onClick={() => setMockTimingMode('strict')}
-                        className={`p-4 rounded-xl border text-left transition cursor-pointer ${
+                        className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                           mockTimingMode === 'strict'
-                            ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
-                            : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
+                            ? (isDark ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold' : isMono ? 'bg-neutral-100 border-2 border-black text-black font-bold' : 'bg-red-50 border-red-600 text-red-700 font-bold')
+                            : (isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-200 text-slate-600')
                         }`}
                       >
                         <span className="block uppercase font-bold text-xs tracking-wider">Strict Timer</span>
@@ -1091,10 +1037,10 @@ export default function ExamPortal() {
                       <button
                         type="button"
                         onClick={() => setMockTimingMode('liberal')}
-                        className={`p-4 rounded-xl border text-left transition cursor-pointer ${
+                        className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                           mockTimingMode === 'liberal'
-                            ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold'
-                            : 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]'
+                            ? (isDark ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.94_0.21_118)] font-bold' : isMono ? 'bg-neutral-100 border-2 border-black text-black font-bold' : 'bg-red-50 border-red-600 text-red-700 font-bold')
+                            : (isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.68_0.04_265)]' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-200 text-slate-600')
                         }`}
                       >
                         <span className="block uppercase font-bold text-xs tracking-wider">Liberal Timer</span>
@@ -1106,20 +1052,20 @@ export default function ExamPortal() {
 
                 {testMode === 'Time-Based Practice' && (
                   <div>
-                    <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Sprint Duration</label>
+                    <label className={`block uppercase tracking-[0.15em] mb-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-700'}`}>Select Sprint Duration</label>
                     <div className="grid grid-cols-4 gap-2.5">
                       {[10, 15, 30, 45].map((mins) => (
                         <button
                           key={mins}
                           type="button"
                           onClick={() => setPracticeMinutes(mins)}
-                          className={`p-3 rounded-xl border text-center transition cursor-pointer font-bold ${
+                          className={`p-3 rounded-2xl border text-center transition cursor-pointer font-bold ${
                             Number(practiceMinutes) === mins
-                              ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
-                              : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-[oklch(0.96_0.012_265)]'
+                              ? (isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)] shadow-[0_0_15px_rgba(204,255,0,0.2)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-600 text-white border-red-600 shadow-sm')
+                              : (isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] border-white/10 hover:text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 text-slate-700 border-slate-200')
                           }`}
                         >
-                          {mins} MINS
+                          {mins} Mins
                         </button>
                       ))}
                     </div>
@@ -1129,9 +1075,13 @@ export default function ExamPortal() {
                 {testMode === 'Topic-Based' && (
                   <div className="space-y-4">
                     <div>
-                      <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Main Category</label>
+                      <label className={`block uppercase tracking-[0.15em] mb-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-700'}`}>Select Main Category</label>
                       <select
-                        className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                        className={`w-full border rounded-2xl p-4 text-sm transition cursor-pointer focus:outline-none ${
+                          isDark 
+                            ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-white focus:border-[oklch(0.94_0.21_118)]' 
+                            : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-red-600'
+                        }`}
                         value={selectedMainCategory}
                         onChange={(e) => {
                           const newCat = e.target.value;
@@ -1153,9 +1103,13 @@ export default function ExamPortal() {
                     </div>
 
                     <div>
-                      <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Select Target Subtopic</label>
+                      <label className={`block uppercase tracking-[0.15em] mb-2 ${isDark ? 'text-[oklch(0.68_0.04_265)]' : 'text-slate-700'}`}>Select Target Subtopic</label>
                       <select
-                        className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)] transition cursor-pointer"
+                        className={`w-full border rounded-2xl p-4 text-sm transition cursor-pointer focus:outline-none ${
+                          isDark 
+                            ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-white focus:border-[oklch(0.94_0.21_118)]' 
+                            : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-red-600'
+                        }`}
                         value={selectedSubtopicId}
                         onChange={(e) => setSelectedSubtopicId(e.target.value)}
                       >
@@ -1177,7 +1131,11 @@ export default function ExamPortal() {
               <button
                 onClick={startExam}
                 disabled={loading || exams.length === 0}
-                className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer disabled:opacity-50"
+                className={`w-full py-4 font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-2xl transition cursor-pointer disabled:opacity-50 ${
+                  isDark 
+                    ? 'bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] shadow-[0_0_25px_rgba(204,255,0,0.25)]' 
+                    : isMono ? 'bg-black text-white border-2 border-black hover:bg-neutral-800' : 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
+                }`}
               >
                 {loading ? 'BUILDING QUESTION BANK...' : exams.length === 0 ? 'NO EXAMS ALLOCATED TO YOU' : 'INITIALIZE MOCK SESSION →'}
               </button>
@@ -1186,17 +1144,22 @@ export default function ExamPortal() {
 
         </div>
 
-        <div className="max-w-3xl mx-auto w-full mt-16 bg-[oklch(0.23_0.045_265)]/90 backdrop-blur-2xl border border-white/15 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
-          <div className="flex justify-between items-center border-b border-white/10 pb-4">
-            <span className="font-mono text-xs uppercase tracking-[0.1em] text-[oklch(0.94_0.21_118)] font-bold">The Daily Dilemma: Challenge your choice</span>
-            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-[oklch(0.16_0.03_265)] border border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)] font-mono text-xs font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-[oklch(0.94_0.21_118)] animate-ping"></span>
+        {/* Daily Dilemma Section */}
+        <div className={`max-w-3xl mx-auto w-full mt-16 border rounded-3xl p-8 shadow-xl relative z-10 space-y-6 transition-colors duration-200 ${
+          isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 text-slate-900'
+        }`}>
+          <div className={`flex justify-between items-center border-b pb-4 ${isDark ? 'border-white/10' : isMono ? 'border-black' : 'border-slate-200'}`}>
+            <span className={`font-mono text-xs uppercase tracking-[0.1em] font-bold ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>The Daily Dilemma: Challenge your choice</span>
+            <div className={`flex items-center gap-2 px-3 py-1 rounded-full border font-mono text-xs font-bold ${
+              isDark ? 'bg-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)]' : isMono ? 'bg-neutral-100 border-2 border-black text-black' : 'bg-red-50 border-red-200 text-red-600'
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full animate-ping ${isDark ? 'bg-[oklch(0.94_0.21_118)]' : isMono ? 'bg-black' : 'bg-red-600'}`}></span>
               0:{dilemmaTimer < 10 ? `0${dilemmaTimer}` : dilemmaTimer}
             </div>
           </div>
 
           <div className="space-y-4">
-            <p className="text-sm sm:text-base font-semibold text-[oklch(0.96_0.012_265)] min-h-[48px]">
+            <p className={`text-sm sm:text-base font-semibold min-h-[48px] ${isDark ? 'text-white' : isMono ? 'text-black' : 'text-slate-800'}`}>
               <MathText text={dilemmaQuestion ? dilemmaQuestion.question_text : 'Loading dilemma from separate table...'} />
             </p>
 
@@ -1207,31 +1170,33 @@ export default function ExamPortal() {
                   const isSelected = dilemmaSelectedIndex === oIdx;
                   const isCorrect = opt.is_correct;
 
-                  let borderStyle = 'border-white/5 bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)]';
+                  let borderStyle = isDark ? 'border-white/5 bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)]' : isMono ? 'border-2 border-black bg-white text-black' : 'border-slate-200 bg-slate-50 text-slate-700';
                   if (dilemmaSubmitted) {
                     if (isCorrect) {
-                      borderStyle = 'border-emerald-500 bg-emerald-500/20 text-emerald-300 font-bold';
+                      borderStyle = isMono ? 'border-2 border-black bg-neutral-200 text-black font-bold' : 'border-emerald-500 bg-emerald-50 text-emerald-700 font-bold';
                     } else if (isSelected && !isCorrect) {
-                      borderStyle = 'border-rose-500 bg-rose-500/20 text-rose-300';
+                      borderStyle = isMono ? 'border-2 border-dashed border-black bg-neutral-100 text-black' : 'border-rose-500 bg-rose-50 text-rose-700';
                     }
                   } else if (isSelected) {
-                    borderStyle = 'border-[oklch(0.94_0.21_118)] bg-[oklch(0.94_0.21_118)]/10 text-[oklch(0.96_0.012_265)] shadow-[0_0_15px_rgba(204,255,0,0.15)]';
+                    borderStyle = isDark 
+                      ? 'border-[oklch(0.94_0.21_118)] bg-[oklch(0.94_0.21_118)]/10 text-white shadow-[0_0_15px_rgba(204,255,0,0.15)]' 
+                      : isMono ? 'border-2 border-black bg-black text-white font-bold' : 'border-red-600 bg-red-50 text-red-900 shadow-xs';
                   }
 
                   return (
                     <div
                       key={optId}
                       onClick={() => !dilemmaSubmitted && setDilemmaSelectedIndex(oIdx)}
-                      className={`p-3 rounded-xl border transition cursor-pointer flex justify-between items-center ${borderStyle}`}
+                      className={`p-4 rounded-2xl border transition cursor-pointer flex justify-between items-center ${borderStyle}`}
                     >
                       <span>{String.fromCharCode(65 + oIdx)} — <MathText text={opt.option_text} /></span>
-                      {dilemmaSubmitted && isCorrect && <span className="text-emerald-400 font-bold">✓ CORRECT</span>}
-                      {!dilemmaSubmitted && isSelected && <span className="text-[oklch(0.94_0.21_118)] font-bold">SELECTED</span>}
+                      {dilemmaSubmitted && isCorrect && <span className="font-bold">✓ CORRECT</span>}
+                      {!dilemmaSubmitted && isSelected && <span className="font-bold">SELECTED</span>}
                     </div>
                   );
                 })
               ) : (
-                <div className="p-3 text-center text-slate-500">Fetching options...</div>
+                <div className="p-4 text-center opacity-60">Fetching options...</div>
               )}
             </div>
           </div>
@@ -1240,7 +1205,9 @@ export default function ExamPortal() {
             <button
               onClick={() => setDilemmaSubmitted(true)}
               disabled={dilemmaSelectedIndex === null || dilemmaSubmitted}
-              className="px-4 py-2 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-wider font-extrabold rounded-xl shadow transition disabled:opacity-40 cursor-pointer"
+              className={`px-6 py-3 font-mono text-xs uppercase tracking-wider font-extrabold rounded-full shadow-sm transition disabled:opacity-40 cursor-pointer ${
+                isDark ? 'bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)]' : isMono ? 'bg-black text-white border-2 border-black hover:bg-neutral-800' : 'bg-red-600 hover:bg-red-700 text-white'
+              }`}
             >
               Submit Answer
             </button>
@@ -1250,7 +1217,7 @@ export default function ExamPortal() {
                   setDilemmaSubmitted(false);
                   setDilemmaSelectedIndex(null);
                 }}
-                className="font-mono text-[10px] uppercase tracking-wider text-[oklch(0.68_0.04_265)] hover:text-white underline cursor-pointer"
+                className={`font-mono text-[10px] uppercase tracking-wider underline cursor-pointer opacity-70 hover:opacity-100`}
               >
                 Reset
               </button>
@@ -1262,7 +1229,7 @@ export default function ExamPortal() {
     );
   }
 
-if (stage === 'exam') {
+  if (stage === 'exam') {
     const currentQList = getCurrentActiveQuestions();
     const currentQ = currentQList[currentIndex];
     const paletteCounts = getPaletteSummary();
@@ -1272,43 +1239,51 @@ if (stage === 'exam') {
     const rawPassage = currentQ?.passages?.passage_text || currentQ?.passage_text;
 
     return (
-      <div className="flex flex-col flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] font-sans select-none relative min-h-screen exam-active-container">
-        <header className="bg-[oklch(0.23_0.045_265)] text-white px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between border-b border-white/10 gap-4">
+      <div className={`flex flex-col flex-1 font-sans select-none relative min-h-screen exam-active-container transition-colors duration-200 ${
+        isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)]' : isMono ? 'bg-white text-black' : 'bg-slate-50 text-slate-900'
+      }`}>
+        <header className={`px-4 sm:px-8 py-4 flex flex-wrap items-center justify-between border-b gap-4 transition-colors duration-200 ${
+          isDark ? 'bg-[oklch(0.23_0.045_265)] text-white border-white/10' : isMono ? 'bg-white text-black border-b-2 border-black' : 'bg-white text-slate-900 border-slate-200 shadow-xs'
+        }`}>
           <div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold block">Live Execution HUD</span>
+            <span className={`font-mono text-[10px] uppercase tracking-[0.2em] font-bold block ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>Live Execution HUD</span>
             <h2 className="font-bold text-xs sm:text-sm font-mono tracking-wider">{testMode.toUpperCase()}</h2>
           </div>
 
           <div className="flex items-center gap-4 sm:gap-8">
             {mockTimingMode === 'strict' && activeSecTimeLeft !== undefined && (
-              <div className="text-right border-r border-white/10 pr-4 sm:pr-8">
-                <span className="font-mono text-[10px] text-[oklch(0.94_0.21_118)] block uppercase tracking-widest font-bold">Module Clock</span>
-                <span className="text-sm sm:text-base font-mono font-bold text-[oklch(0.94_0.21_118)]">{formatTime(activeSecTimeLeft)}</span>
+              <div className={`text-right border-r pr-4 sm:pr-8 ${isDark ? 'border-white/10' : isMono ? 'border-black' : 'border-slate-200'}`}>
+                <span className={`font-mono text-[10px] block uppercase tracking-widest font-bold ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black' : 'text-red-600'}`}>Module Clock</span>
+                <span className={`text-sm sm:text-base font-mono font-bold ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black' : 'text-red-600'}`}>{formatTime(activeSecTimeLeft)}</span>
               </div>
             )}
             <div className="text-right">
-              <span className="font-mono text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest">Total Countdown</span>
-              <span className="text-sm sm:text-lg font-mono font-bold text-amber-400">{formatTime(timeLeft)}</span>
+              <span className={`font-mono text-[10px] block uppercase tracking-widest opacity-75`}>Total Countdown</span>
+              <span className="text-sm sm:text-lg font-mono font-bold text-amber-500">{formatTime(timeLeft)}</span>
             </div>
             
             <button
               onClick={() => setIsPaletteOpen(!isPaletteOpen)}
-              className="lg:hidden bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] font-mono text-xs font-bold px-3 py-2 rounded-xl exam-nav-action"
+              className={`lg:hidden font-mono text-xs font-bold px-4 py-2 rounded-full exam-nav-action ${
+                isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-600 text-white shadow-sm'
+              }`}
             >
               {isPaletteOpen ? 'Close Grid' : 'Grid'}
             </button>
 
             <button
               onClick={() => setShowSubmitConfirm(true)}
-              className="bg-rose-600 hover:bg-rose-500 text-white font-mono text-xs font-bold uppercase tracking-[0.15em] px-4 py-2.5 rounded-xl shadow-lg transition cursor-pointer exam-nav-action"
+              className={`${isMono ? 'bg-neutral-200 text-black border-2 border-black hover:bg-black hover:text-white' : 'bg-rose-600 hover:bg-rose-700 text-white'} font-mono text-xs font-bold uppercase tracking-[0.15em] px-5 py-2.5 rounded-full shadow-sm transition cursor-pointer exam-nav-action`}
             >
               Submit Test
             </button>
           </div>
         </header>
 
-        <div className="bg-[oklch(0.23_0.045_265)]/50 px-4 sm:px-8 py-2.5 flex items-center gap-2 border-b border-white/10 overflow-x-auto font-mono text-xs">
-          <span className="text-[oklch(0.68_0.04_265)] uppercase font-bold tracking-[0.15em] mr-2 shrink-0">Modules:</span>
+        <div className={`px-4 sm:px-8 py-3 flex items-center gap-2 border-b overflow-x-auto font-mono text-xs transition-colors duration-200 ${
+          isDark ? 'bg-[oklch(0.23_0.045_265)]/50 border-white/10' : isMono ? 'bg-neutral-50 border-b-2 border-black' : 'bg-slate-100 border-slate-200'
+        }`}>
+          <span className={`uppercase font-bold tracking-[0.15em] mr-2 shrink-0 opacity-75`}>Modules:</span>
           {sections.map((sec, idx) => {
             const secId = sec.section_id || sec.id;
             const isCurrent = activeSectionIndex === idx;
@@ -1316,12 +1291,12 @@ if (stage === 'exam') {
               <button
                 key={secId}
                 onClick={() => handleSelectSection(idx)}
-                className={`px-4 py-2 rounded-xl font-bold tracking-wider transition shrink-0 cursor-pointer exam-nav-action ${
+                className={`px-4 py-2 rounded-full font-bold tracking-wider transition shrink-0 cursor-pointer exam-nav-action ${
                   isCurrent
-                    ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]'
+                    ? (isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-600 text-white shadow-sm')
                     : mockTimingMode === 'strict'
-                    ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] opacity-50 cursor-not-allowed border border-white/5'
-                    : 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] hover:text-[oklch(0.96_0.012_265)] border border-white/5'
+                    ? (isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] opacity-50 cursor-not-allowed border border-white/5' : isMono ? 'bg-neutral-200 text-neutral-500 border-2 border-black opacity-50 cursor-not-allowed' : 'bg-slate-200 text-slate-400 opacity-50 cursor-not-allowed border border-slate-300')
+                    : (isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.68_0.04_265)] hover:text-white border border-white/5' : isMono ? 'bg-white text-black border-2 border-black hover:bg-neutral-100' : 'bg-white text-slate-700 hover:text-slate-900 border border-slate-300 shadow-xs')
                 }`}
               >
                 {cleanText(sec.section_name).toUpperCase()} ({sectionQuestionsMap[secId]?.length || 0}) {mockTimingMode === 'strict' && !isCurrent && '🔒'}
@@ -1331,51 +1306,61 @@ if (stage === 'exam') {
         </div>
 
         <div className="flex flex-1 relative overflow-hidden">
-          <main className="flex-1 flex flex-col bg-[oklch(0.16_0.03_265)] border-r border-white/10 overflow-hidden w-full">
-            <div className="px-6 py-3.5 bg-[oklch(0.23_0.045_265)]/30 border-b border-white/10 flex items-center justify-between font-mono text-xs">
-              <span className="font-bold text-[oklch(0.96_0.012_265)] tracking-wider">
+          <main className={`flex-1 flex flex-col border-r overflow-hidden w-full transition-colors duration-200 ${
+            isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10' : isMono ? 'bg-white border-black' : 'bg-slate-50 border-slate-200'
+          }`}>
+            <div className={`px-6 py-3.5 border-b flex items-center justify-between font-mono text-xs ${
+              isDark ? 'bg-[oklch(0.23_0.045_265)]/30 border-white/10' : isMono ? 'bg-neutral-100 border-b-2 border-black' : 'bg-white border-slate-200'
+            }`}>
+              <span className="font-bold tracking-wider">
                 {cleanText(sections[activeSectionIndex]?.section_name).toUpperCase()} {currentQ ? `> Q.${currentIndex + 1}` : ''}
               </span>
-              <span className="text-[oklch(0.68_0.04_265)] uppercase tracking-widest">Difficulty: {currentQ?.difficulty_level || 'Moderate'}</span>
+              <span className="uppercase tracking-widest opacity-70">Difficulty: {currentQ?.difficulty_level || 'Moderate'}</span>
             </div>
 
             <div className="flex-1 flex flex-col lg:flex-row overflow-y-auto">
+              
               {currentQ?.chart_data || currentQ?.table_data ? (
-                <div className="w-full lg:w-1/2 p-6 border-b lg:border-b-0 lg:border-r border-white/10 bg-[oklch(0.18_0.03_265)] flex flex-col justify-center">
-                  <h3 className="font-mono text-xs font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider mb-2">Data Interpretation</h3>
+                <div className={`w-full lg:w-1/2 p-6 border-b lg:border-b-0 lg:border-r flex flex-col justify-center ${
+                  isDark ? 'border-white/10 bg-[oklch(0.18_0.03_265)]' : isMono ? 'border-black bg-white' : 'border-slate-200 bg-white'
+                }`}>
+                  <h3 className={`font-mono text-xs font-bold uppercase tracking-wider mb-2 ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>Data Interpretation</h3>
                   <h2 className="text-xl font-bold mb-4">{currentQ.title}</h2>
                   <DIChartRenderer 
                     chartType={currentQ.chart_type} 
                     categories={currentQ.chart_categories} 
                     data={currentQ.chart_data} 
                     tableData={currentQ.table_data}
+                    theme={theme}
                   />
                 </div>
               ) : rawPassage ? (
-                <div className={`w-full ${currentQ?.chart_data || currentQ?.table_data || rawPassage ? 'lg:w-1/2' : 'w-full'} p-6 sm:p-10 space-y-6 overflow-y-auto`}>
+                <div className={`w-full lg:w-1/2 p-6 sm:p-10 space-y-6 overflow-y-auto ${isDark ? 'bg-[oklch(0.18_0.03_265)] text-slate-300 border-r border-white/10' : isMono ? 'bg-white text-black border-r-2 border-black' : 'bg-white text-slate-700 border-r border-slate-200'}`}>
                   <p className="leading-relaxed whitespace-pre-line font-sans"><MathText text={rawPassage} /></p>
                 </div>
               ) : null}
 
-              <div className={`w-full ${currentQ?.chart_data || rawPassage ? 'lg:w-1/2' : 'w-full'} p-6 sm:p-10 space-y-6 overflow-y-auto`}>
+              <div className={`w-full ${currentQ?.chart_data || rawPassage ? 'lg:w-1/2' : 'lg:w-full'} p-6 sm:p-10 space-y-6 overflow-y-auto ${isDark ? 'bg-[oklch(0.16_0.03_265)]' : isMono ? 'bg-white' : 'bg-slate-50'}`}>
                 {!currentQ ? (
                   <div className="flex-1 flex flex-col items-center justify-center p-12 text-center font-mono text-xs my-auto">
-                    <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-6 rounded-2xl space-y-3 max-w-md mx-auto">
-                      <p className="text-[oklch(0.96_0.012_265)] font-bold uppercase tracking-wider">No Questions Deployed</p>
-                      <p className="text-[oklch(0.68_0.04_265)] leading-relaxed">
-                        There are no active questions loaded for <span className="text-[oklch(0.94_0.21_118)]">{cleanText(sections[activeSectionIndex]?.section_name)}</span>. Please check your database.
+                    <div className={`border p-6 rounded-3xl space-y-3 max-w-md mx-auto ${
+                      isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10' : isMono ? 'bg-white border-2 border-black' : 'bg-white border-slate-200 shadow-sm'
+                    }`}>
+                      <p className="font-bold uppercase tracking-wider">No Questions Deployed</p>
+                      <p className="leading-relaxed opacity-75">
+                        There are no active questions loaded for <span className={isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}>{cleanText(sections[activeSectionIndex]?.section_name)}</span>. Please check your database.
                       </p>
                     </div>
                   </div>
                 ) : (
                   <>
                     {currentQ?.image_url && (
-                      <div className="flex justify-center bg-[oklch(0.23_0.045_265)] p-4 rounded-2xl border border-white/10">
+                      <div className={`flex justify-center p-4 rounded-2xl border ${isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10' : isMono ? 'bg-white border-2 border-black' : 'bg-white border-slate-200 shadow-sm'}`}>
                         <img src={currentQ.image_url} alt="Question Graphic" className="max-h-64 object-contain rounded" />
                       </div>
                     )}
 
-                    <div className="text-base sm:text-lg font-medium text-[oklch(0.96_0.012_265)] leading-relaxed font-sans">
+                    <div className="text-base sm:text-lg font-medium leading-relaxed font-sans">
                       <MathText text={currentQ?.question_text} />
                     </div>
 
@@ -1389,12 +1374,18 @@ if (stage === 'exam') {
                             onClick={() => handleOptionSelect(optId)}
                             className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
                               isChecked
-                                ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-[oklch(0.96_0.012_265)] shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]'
-                                : 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-[oklch(0.96_0.012_265)]'
+                                ? (isDark 
+                                    ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-white shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]' 
+                                    : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-50 border-red-600 text-slate-900 shadow-sm ring-1 ring-red-600')
+                                : (isDark 
+                                    ? 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-white' 
+                                    : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 shadow-xs')
                             }`}
                           >
                             <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
-                              isChecked ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : 'bg-[oklch(0.16_0.03_265)] border-white/20 text-[oklch(0.96_0.012_265)]'
+                              isChecked 
+                                ? (isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : isMono ? 'bg-white text-black border-2 border-black' : 'bg-red-600 text-white border-red-600') 
+                                : (isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/20 text-white' : isMono ? 'bg-neutral-100 border-2 border-black text-black' : 'bg-slate-100 border-slate-300 text-slate-800')
                             }`}>
                               {String.fromCharCode(65 + oIndex)}
                             </span>
@@ -1409,19 +1400,25 @@ if (stage === 'exam') {
 
             </div>
 
-            <div className="px-6 py-4 bg-[oklch(0.23_0.045_265)]/40 border-t border-white/10 flex flex-wrap items-center justify-between gap-4 font-mono">
+            <div className={`px-6 py-4 border-t flex flex-wrap items-center justify-between gap-4 font-mono ${
+              isDark ? 'bg-[oklch(0.23_0.045_265)]/40 border-white/10' : isMono ? 'bg-neutral-100 border-t-2 border-black' : 'bg-white border-slate-200'
+            }`}>
               <div className="flex gap-3">
                 <button
                   onClick={handleMarkForReviewAndNext}
                   disabled={!currentQ}
-                  className="px-4 py-2.5 bg-amber-500/25 hover:bg-amber-500/35 text-amber-300 text-xs font-bold uppercase tracking-wider rounded-xl border border-amber-500/30 transition cursor-pointer disabled:opacity-40 exam-nav-action"
+                  className={`px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-full border transition cursor-pointer disabled:opacity-40 exam-nav-action ${
+                    isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-200' : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 border-amber-500/30'
+                  }`}
                 >
                   Mark & Next
                 </button>
                 <button
                   onClick={handleClearResponse}
                   disabled={!currentQ}
-                  className="px-4 py-2.5 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.68_0.04_265)] text-xs font-bold uppercase tracking-wider rounded-xl border border-white/10 transition cursor-pointer disabled:opacity-40 exam-nav-action"
+                  className={`px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-full border transition cursor-pointer disabled:opacity-40 exam-nav-action ${
+                    isDark ? 'bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-[oklch(0.68_0.04_265)] border-white/10' : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-200' : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-300 shadow-xs'
+                  }`}
                 >
                   Clear
                 </button>
@@ -1430,34 +1427,42 @@ if (stage === 'exam') {
               <button
                 onClick={handleSaveAndNext}
                 disabled={!currentQ}
-                className="px-6 py-2.5 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] text-xs font-extrabold uppercase tracking-[0.15em] rounded-xl shadow-[0_0_15px_rgba(204,255,0,0.2)] transition cursor-pointer disabled:opacity-40 exam-nav-action"
+                className={`px-6 py-2.5 text-xs font-extrabold uppercase tracking-[0.15em] rounded-full transition cursor-pointer disabled:opacity-40 exam-nav-action ${
+                  isDark ? 'bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] shadow-[0_0_15px_rgba(204,255,0,0.2)]' : isMono ? 'bg-black text-white border-2 border-black hover:bg-neutral-800' : 'bg-red-600 hover:bg-red-700 text-white shadow-sm'
+                }`}
               >
                 Save & Next →
               </button>
             </div>
           </main>
 
-          <aside className={`absolute lg:relative top-0 right-0 h-full w-full sm:w-80 bg-[oklch(0.23_0.045_265)] flex flex-col border-l border-white/10 z-40 transition-transform duration-300 ${isPaletteOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}`}>
-            <div className="p-5 border-b border-white/10 bg-[oklch(0.16_0.03_265)]/50">
+          <aside className={`absolute lg:relative top-0 right-0 h-full w-full sm:w-80 flex flex-col border-l z-40 transition-transform duration-300 ${isPaletteOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'} ${
+            isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10' : isMono ? 'bg-white border-l-2 border-black' : 'bg-white border-slate-200 shadow-xl'
+          }`}>
+            <div className={`p-5 border-b ${isDark ? 'border-white/10 bg-[oklch(0.16_0.03_265)]/50' : isMono ? 'border-b-2 border-black bg-neutral-50' : 'border-slate-200 bg-slate-50'}`}>
               <div className="flex justify-between items-center mb-3">
-                <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)]">HUD Palette Summary</h5>
-                <button onClick={() => setIsPaletteOpen(false)} className="lg:hidden text-xs text-white font-mono bg-white/10 px-2 py-1 rounded exam-nav-action">✕</button>
+                <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] opacity-75">HUD Palette Summary</h5>
+                <button onClick={() => setIsPaletteOpen(false)} className={`lg:hidden text-xs font-mono px-2 py-1 rounded exam-nav-action ${isDark ? 'text-white bg-white/10' : isMono ? 'border border-black bg-white' : 'text-slate-700 bg-slate-200'}`}>✕</button>
               </div>
               
               <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
-                <div className="flex items-center justify-between bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1.5 rounded-xl text-emerald-300">
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl font-semibold ${isMono ? 'border-2 border-black bg-white text-black' : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'}`}>
                   <span>Answered</span>
                   <span className="font-bold">{paletteCounts.answered}</span>
                 </div>
-                <div className="flex items-center justify-between bg-rose-500/10 border border-rose-500/20 px-2.5 py-1.5 rounded-xl text-rose-300">
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl font-semibold ${isMono ? 'border-2 border-black bg-neutral-100 text-black' : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'}`}>
                   <span>Unanswered</span>
                   <span className="font-bold">{paletteCounts.notAnswered}</span>
                 </div>
-                <div className="flex items-center justify-between bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/20 px-2.5 py-1.5 rounded-xl text-[oklch(0.94_0.21_118)]">
+                <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-xl font-semibold ${
+                  isDark ? 'bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/20 text-[oklch(0.94_0.21_118)]' : isMono ? 'border-2 border-black bg-neutral-200 text-black' : 'bg-red-50 border border-red-200 text-red-700'
+                }`}>
                   <span>Marked</span>
                   <span className="font-bold">{paletteCounts.marked}</span>
                 </div>
-                <div className="flex items-center justify-between bg-white/5 border border-white/10 px-2.5 py-1.5 rounded-xl text-[oklch(0.68_0.04_265)]">
+                <div className={`flex items-center justify-between border px-2.5 py-1.5 rounded-xl font-semibold ${
+                  isDark ? 'bg-white/5 border-white/10 text-[oklch(0.68_0.04_265)]' : isMono ? 'border-2 border-black bg-white text-black' : 'bg-slate-100 border-slate-200 text-slate-600'
+                }`}>
                   <span>Unvisited</span>
                   <span className="font-bold">{paletteCounts.notVisited}</span>
                 </div>
@@ -1465,11 +1470,11 @@ if (stage === 'exam') {
             </div>
 
             <div className="p-5 flex-1 overflow-y-auto">
-              <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-3">
+              <h5 className="font-mono text-xs font-bold uppercase tracking-[0.15em] mb-3 opacity-75">
                 Question Navigator
               </h5>
               {currentQList.length === 0 ? (
-                <p className="text-xs font-mono text-[oklch(0.68_0.04_265)] italic">No items in this module.</p>
+                <p className="text-xs font-mono italic opacity-60">No items in this module.</p>
               ) : (
                 <div className="grid grid-cols-5 gap-2">
                   {currentQList.map((q, idx) => (
@@ -1477,7 +1482,7 @@ if (stage === 'exam') {
                       key={q.question_id}
                       onClick={() => handleSelectQuestion(idx)}
                       className={`h-11 rounded-xl font-mono font-bold text-xs shadow transition cursor-pointer exam-nav-action ${getQuestionPaletteStyle(q.question_id)} ${
-                        currentIndex === idx ? 'ring-2 ring-[oklch(0.94_0.21_118)] ring-offset-2 ring-offset-[oklch(0.23_0.045_265)]' : ''
+                        currentIndex === idx ? (isDark ? 'ring-2 ring-[oklch(0.94_0.21_118)] ring-offset-2 ring-offset-[oklch(0.23_0.045_265)]' : isMono ? 'ring-2 ring-black ring-offset-2 ring-offset-white' : 'ring-2 ring-red-600 ring-offset-2 ring-offset-white') : ''
                       }`}
                     >
                       {idx + 1}
@@ -1491,16 +1496,20 @@ if (stage === 'exam') {
 
         {showSubmitConfirm && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
-            <div className="bg-[oklch(0.23_0.045_265)] border border-white/15 rounded-3xl p-8 max-w-md w-full space-y-6 shadow-2xl text-[oklch(0.96_0.012_265)] font-mono">
+            <div className={`border rounded-3xl p-8 max-w-md w-full space-y-6 shadow-2xl font-mono ${
+              isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/15 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 text-slate-900 shadow-xl'
+            }`}>
               <div className="text-center space-y-2">
-                <h3 className="text-xl font-black font-['Archivo_Black'] tracking-tight text-[oklch(0.94_0.21_118)]">CONFIRM SUBMISSION</h3>
-                <p className="text-xs text-[oklch(0.68_0.04_265)] uppercase tracking-wider">Final lock-in of your answers.</p>
+                <h3 className={`text-xl font-black tracking-tight ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>CONFIRM SUBMISSION</h3>
+                <p className="text-xs uppercase tracking-wider opacity-70">Final lock-in of your answers.</p>
               </div>
 
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setShowSubmitConfirm(false)}
-                  className="flex-1 py-3 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 text-xs font-bold uppercase tracking-widest rounded-xl border border-white/10 transition cursor-pointer"
+                  className={`flex-1 py-3 text-xs font-bold uppercase tracking-widest rounded-full border transition cursor-pointer ${
+                    isDark ? 'bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-slate-100 hover:bg-slate-200 border-slate-300 text-slate-700'
+                  }`}
                 >
                   Resume
                 </button>
@@ -1509,7 +1518,7 @@ if (stage === 'exam') {
                     setShowSubmitConfirm(false);
                     handleSubmitTest();
                   }}
-                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-500 text-xs font-bold uppercase tracking-widest rounded-xl shadow-lg transition cursor-pointer"
+                  className={`flex-1 py-3 ${isMono ? 'bg-black text-white border-2 border-black hover:bg-neutral-800' : 'bg-rose-600 hover:bg-rose-700 text-white'} text-xs font-bold uppercase tracking-widest rounded-full shadow-sm transition cursor-pointer`}
                 >
                   Lock In
                 </button>
@@ -1521,7 +1530,7 @@ if (stage === 'exam') {
     );
   }
 
- if (stage === 'result' && attemptResult) {
+  if (stage === 'result' && attemptResult) {
     let sectionStats = sections.map((sec) => {
       const secId = sec.section_id || sec.id;
       const qList = sectionQuestionsMap[secId] || [];
@@ -1559,70 +1568,84 @@ if (stage === 'exam') {
     });
 
     return (
-      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center overflow-y-auto font-sans">
+      <div className={`flex-1 p-6 sm:p-12 flex flex-col items-center overflow-y-auto font-sans transition-colors duration-200 ${
+        isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)]' : isMono ? 'bg-white text-black' : 'bg-slate-50 text-slate-900'
+      }`}>
         <div className="w-full max-w-4xl space-y-8">
           
-          <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl text-center space-y-6 backdrop-blur-xl">
-            <div className="inline-flex px-4 py-1 rounded-full bg-[oklch(0.94_0.21_118)]/10 border border-[oklch(0.94_0.21_118)]/30 font-mono text-xs uppercase tracking-[0.2em] text-[oklch(0.94_0.21_118)] font-bold">
+          <div className={`border rounded-3xl p-8 shadow-sm text-center space-y-6 backdrop-blur-xl transition-colors duration-200 ${
+            isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 shadow-xl'
+          }`}>
+            <div className={`inline-flex px-4 py-1 rounded-full border font-mono text-xs uppercase tracking-[0.2em] font-bold ${
+              isDark ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)]/30 text-[oklch(0.94_0.21_118)]' : isMono ? 'bg-neutral-100 border-2 border-black text-black' : 'bg-red-50 border-red-200 text-red-600'
+            }`}>
               Mission Debrief
             </div>
-            <h2 className="text-3xl font-black font-['Archivo_Black'] tracking-tight">ASSESSMENT PERFORMANCE HUD</h2>
+            <h2 className="text-3xl font-black tracking-tight">ASSESSMENT PERFORMANCE HUD</h2>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 font-mono">
-              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
-                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Total Items</span>
-                <span className="text-xl font-black text-white font-['Archivo_Black']">{attemptResult.totalQuestions}</span>
+              <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5' : isMono ? 'bg-white border-2 border-black' : 'bg-slate-50 border-slate-200'}`}>
+                <span className="text-[10px] block uppercase tracking-widest font-bold opacity-70">Total Items</span>
+                <span className="text-xl font-black">{attemptResult.totalQuestions}</span>
               </div>
-              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
-                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Attempted</span>
-                <span className="text-xl font-black text-amber-400 font-['Archivo_Black']">{attemptResult.attempted}</span>
+              <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5' : isMono ? 'bg-white border-2 border-black' : 'bg-slate-50 border-slate-200'}`}>
+                <span className="text-[10px] block uppercase tracking-widest font-bold opacity-70">Attempted</span>
+                <span className="text-xl font-black text-amber-500">{attemptResult.attempted}</span>
               </div>
-              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
-                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Accuracy</span>
-                <span className="text-xl font-black text-[oklch(0.94_0.21_118)] font-['Archivo_Black']">{attemptResult.accuracy}%</span>
+              <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5' : isMono ? 'bg-white border-2 border-black' : 'bg-slate-50 border-slate-200'}`}>
+                <span className="text-[10px] block uppercase tracking-widest font-bold opacity-70">Accuracy</span>
+                <span className={`text-xl font-black ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>{attemptResult.accuracy}%</span>
               </div>
-              <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5">
-                <span className="text-[10px] text-[oklch(0.68_0.04_265)] block uppercase tracking-widest font-bold">Final Score</span>
-                <span className="text-xl font-black text-emerald-400 font-['Archivo_Black']">{attemptResult.score}</span>
+              <div className={`p-4 rounded-2xl border ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5' : isMono ? 'bg-white border-2 border-black' : 'bg-slate-50 border-slate-200'}`}>
+                <span className="text-[10px] block uppercase tracking-widest font-bold opacity-70">Final Score</span>
+                <span className="text-xl font-black text-emerald-500">{attemptResult.score}</span>
               </div>
             </div>
           </div>
 
-          <div className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl space-y-6">
-            <h3 className="font-mono text-xs font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-[0.2em] border-b border-white/10 pb-3">Module-wise Precision & Weak Zones</h3>
+          <div className={`border rounded-3xl p-8 shadow-sm space-y-6 transition-colors duration-200 ${
+            isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 shadow-xl'
+          }`}>
+            <h3 className={`font-mono text-xs font-bold uppercase tracking-[0.2em] border-b pb-3 ${
+              isDark ? 'text-[oklch(0.94_0.21_118)] border-white/10' : isMono ? 'border-black text-black' : 'text-red-600 border-slate-200'
+            }`}>Module-wise Precision & Weak Zones</h3>
 
             <div className="space-y-4 font-mono">
               {sectionStats.map((stat, idx) => {
                 const isWeak = stat.accuracy < 50 && stat.total > 0;
                 return (
-                  <div key={idx} className="bg-[oklch(0.16_0.03_265)] border border-white/5 rounded-2xl p-5 space-y-3">
+                  <div key={idx} className={`border rounded-2xl p-5 space-y-3 ${
+                    isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5' : isMono ? 'bg-neutral-50 border-2 border-black' : 'bg-slate-50 border-slate-200 shadow-xs'
+                  }`}>
                     <div className="flex flex-wrap justify-between items-center gap-2">
                       <div className="flex items-center gap-3">
-                        <span className="font-bold text-sm text-[oklch(0.96_0.012_265)]">{cleanText(stat.name).toUpperCase()}</span>
+                        <span className="font-bold text-sm">{cleanText(stat.name).toUpperCase()}</span>
                         {isWeak ? (
-                          <span className="bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest">
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest ${isMono ? 'bg-neutral-200 border border-black text-black' : 'bg-rose-500/10 border border-rose-500/30 text-rose-400'}`}>
                             ⚠️ WEAK ZONE
                           </span>
                         ) : (
-                          <span className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest">
+                          <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded uppercase tracking-widest ${isMono ? 'bg-neutral-200 border border-black text-black' : 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'}`}>
                             ✅ LOCKED IN
                           </span>
                         )}
                       </div>
-                      <span className="text-xs font-bold text-[oklch(0.94_0.21_118)]">{stat.accuracy}% PRECISION</span>
+                      <span className={`text-xs font-bold ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black' : 'text-red-600'}`}>{stat.accuracy}% PRECISION</span>
                     </div>
 
-                    <div className="w-full bg-[oklch(0.23_0.045_265)] h-2.5 rounded-full overflow-hidden flex border border-white/10">
-                      <div style={{ width: `${stat.total ? (stat.correct / stat.total) * 100 : 0}%` }} className="bg-emerald-500"></div>
-                      <div style={{ width: `${stat.total ? (stat.incorrect / stat.total) * 100 : 0}%` }} className="bg-rose-500"></div>
-                      <div style={{ width: `${stat.total ? (stat.unattempted / stat.total) * 100 : 0}%` }} className="bg-white/20"></div>
+                    <div className={`h-2.5 rounded-full overflow-hidden flex border ${
+                      isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10' : isMono ? 'bg-neutral-200 border-2 border-black' : 'bg-slate-200 border-slate-300'
+                    }`}>
+                      <div style={{ width: `${stat.total ? (stat.correct / stat.total) * 100 : 0}%` }} className={isMono ? 'bg-black' : 'bg-emerald-500'}></div>
+                      <div style={{ width: `${stat.total ? (stat.incorrect / stat.total) * 100 : 0}%` }} className={isMono ? 'bg-neutral-400' : 'bg-rose-500'}></div>
+                      <div style={{ width: `${stat.total ? (stat.unattempted / stat.total) * 100 : 0}%` }} className={isDark ? 'bg-white/20' : isMono ? 'bg-neutral-100' : 'bg-slate-400'}></div>
                     </div>
 
-                    <div className="flex flex-wrap justify-between text-[11px] text-[oklch(0.68_0.04_265)] pt-1">
-                      <span className="text-emerald-400">Correct: {stat.correct}</span>
-                      <span className="text-rose-400">Incorrect: {stat.incorrect}</span>
+                    <div className="flex flex-wrap justify-between text-[11px] pt-1 opacity-75">
+                      <span className="font-semibold">Correct: {stat.correct}</span>
+                      <span className="font-semibold">Incorrect: {stat.incorrect}</span>
                       <span>Unattempted: {stat.unattempted}</span>
-                      <span className="text-[oklch(0.94_0.21_118)]">Time: {Math.floor(stat.totalTime / 60)}m {stat.totalTime % 60}s</span>
+                      <span className={isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black font-bold' : 'text-red-600'}>Time: {Math.floor(stat.totalTime / 60)}m {stat.totalTime % 60}s</span>
                     </div>
                   </div>
                 );
@@ -1633,19 +1656,25 @@ if (stage === 'exam') {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 font-mono text-xs">
             <button
               onClick={() => setStage('solutions')}
-              className="py-4 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg"
+              className={`py-4 border font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg ${
+                isDark ? 'bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20' : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-red-50 hover:bg-red-100 border border-red-200 text-red-700'
+              }`}
             >
               📖 View Solutions
             </button>
             <button
               onClick={() => setStage('swot')}
-              className="py-4 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg"
+              className={`py-4 border font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg ${
+                isDark ? 'bg-purple-500/10 border-purple-500/30 text-purple-400 hover:bg-purple-500/20' : isMono ? 'bg-neutral-100 border-2 border-black text-black hover:bg-neutral-200' : 'bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700'
+              }`}
             >
               📊 SWOT Analysis
             </button>
             <button
               onClick={() => setStage('config')}
-              className="py-4 bg-[oklch(0.23_0.045_265)] hover:bg-[oklch(0.23_0.045_265)]/80 border border-white/10 text-[oklch(0.96_0.012_265)] font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg"
+              className={`py-4 border font-bold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-lg ${
+                isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white hover:bg-[oklch(0.23_0.045_265)]/80' : isMono ? 'bg-black border-2 border-black text-white hover:bg-neutral-800' : 'bg-white border-slate-300 text-slate-800 hover:bg-slate-50'
+              }`}
             >
               🏠 Main HUD
             </button>
@@ -1659,13 +1688,19 @@ if (stage === 'exam') {
     const allQs = Object.values(sectionQuestionsMap).flat();
 
     return (
-      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center overflow-y-auto font-sans">
+      <div className={`flex-1 p-6 sm:p-12 flex flex-col items-center overflow-y-auto font-sans transition-colors duration-200 ${
+        isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)]' : isMono ? 'bg-white text-black' : 'bg-slate-50 text-slate-900'
+      }`}>
         <div className="w-full max-w-4xl space-y-6">
-          <div className="flex justify-between items-center bg-[oklch(0.23_0.045_265)] border border-white/10 p-6 rounded-2xl shadow-xl">
-            <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight text-[oklch(0.94_0.21_118)]">DETAILED SOLUTIONS</h2>
+          <div className={`border p-6 rounded-3xl shadow-sm flex justify-between items-center ${
+            isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 shadow-md'
+          }`}>
+            <h2 className={`text-xl font-black tracking-tight ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>DETAILED SOLUTIONS</h2>
             <button
               onClick={() => setStage('result')}
-              className="px-4 py-2 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-wider font-bold rounded-xl transition cursor-pointer"
+              className={`px-4 py-2 border font-mono text-xs uppercase tracking-wider font-bold rounded-full transition cursor-pointer ${
+                isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 hover:bg-[oklch(0.16_0.03_265)]/80 text-white' : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-slate-100 border-slate-300 hover:bg-slate-200 text-slate-700'
+              }`}
             >
               ← Back to Debrief
             </button>
@@ -1680,16 +1715,22 @@ if (stage === 'exam') {
               const timeSpentSecs = questionTimers[q.question_id] || 0;
 
               return (
-                <div key={q.question_id} className="bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-4">
-                  <div className="flex justify-between items-center border-b border-white/10 pb-4 font-mono text-xs flex-wrap gap-2">
+                <div key={q.question_id} className={`border rounded-3xl p-6 sm:p-8 shadow-sm space-y-4 ${
+                  isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 shadow-md'
+                }`}>
+                  <div className={`flex justify-between items-center border-b pb-4 font-mono text-xs flex-wrap gap-2 ${isDark ? 'border-white/10' : isMono ? 'border-black' : 'border-slate-200'}`}>
                     <div className="flex items-center gap-3">
-                      <span className="font-bold text-[oklch(0.96_0.012_265)]">Q.No. {idx + 1}</span>
-                      <span className="text-[oklch(0.94_0.21_118)] bg-[oklch(0.16_0.03_265)] px-2.5 py-1 rounded-xl border border-white/10">
+                      <span className="font-bold">Q.No. {idx + 1}</span>
+                      <span className={`px-3 py-1 rounded-full border ${isDark ? 'text-[oklch(0.94_0.21_118)] bg-[oklch(0.16_0.03_265)] border-white/10' : isMono ? 'bg-neutral-100 border-2 border-black text-black' : 'text-red-600 bg-red-50 border-red-200'}`}>
                         ⏱ {timeSpentSecs}s
                       </span>
                     </div>
-                    <span className={`font-bold px-3 py-1 rounded-xl uppercase tracking-wider text-[11px] ${
-                      !studentAnswerId ? 'bg-white/5 text-[oklch(0.68_0.04_265)]' : isCorrect ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                    <span className={`font-bold px-3 py-1 rounded-full uppercase tracking-wider text-[11px] ${
+                      !studentAnswerId 
+                        ? (isDark ? 'bg-white/5 opacity-60' : isMono ? 'border border-black bg-neutral-100 text-black' : 'bg-slate-100 text-slate-500 border border-slate-200') 
+                        : isCorrect 
+                          ? (isMono ? 'border border-black bg-neutral-200 text-black' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30') 
+                          : (isMono ? 'border border-dashed border-black bg-neutral-100 text-black' : 'bg-rose-500/10 text-rose-400 border border-rose-500/30')
                     }`}>
                       {!studentAnswerId ? 'Unattempted' : isCorrect ? 'Correct' : 'Incorrect'}
                     </span>
@@ -1703,12 +1744,12 @@ if (stage === 'exam') {
                       const isStudentChoice = studentAnswerId === optId;
                       const isRightChoice = opt.is_correct;
 
-                      let badgeStyle = 'bg-[oklch(0.16_0.03_265)] border-white/5 text-[oklch(0.68_0.04_265)]';
-                      if (isRightChoice) badgeStyle = 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
-                      else if (isStudentChoice && !isRightChoice) badgeStyle = 'bg-rose-500/10 border-rose-500/30 text-rose-300';
+                      let badgeStyle = isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5 opacity-70' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-200 text-slate-600';
+                      if (isRightChoice) badgeStyle = isMono ? 'bg-neutral-200 border-2 border-black text-black font-bold' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-semibold';
+                      else if (isStudentChoice && !isRightChoice) badgeStyle = isMono ? 'bg-neutral-100 border-2 border-dashed border-black text-black' : 'bg-rose-500/10 border-rose-500/30 text-rose-400 font-semibold';
 
                       return (
-                        <div key={optId} className={`p-3.5 rounded-2xl border flex items-center justify-between ${badgeStyle}`}>
+                        <div key={optId} className={`p-4 rounded-2xl border flex items-center justify-between ${badgeStyle}`}>
                           <span>({String.fromCharCode(65 + oIndex)}) <MathText text={opt.option_text} /></span>
                           <span className="font-bold tracking-wider">
                             {isStudentChoice && '[YOUR PICK] '}
@@ -1720,9 +1761,9 @@ if (stage === 'exam') {
                   </div>
 
                   {q.solution_explanation && (
-                    <div className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/10 font-mono text-xs space-y-1">
-                      <span className="text-[oklch(0.94_0.21_118)] font-bold uppercase tracking-wider block">Solution Breakdown:</span>
-                      <p className="font-sans text-[oklch(0.68_0.04_265)] leading-relaxed"><MathText text={q.solution_explanation} /></p>
+                    <div className={`p-4 rounded-2xl border font-mono text-xs space-y-1 ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10' : isMono ? 'bg-neutral-50 border-2 border-black' : 'bg-slate-50 border-slate-200'}`}>
+                      <span className={`font-bold uppercase tracking-wider block ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>Solution Breakdown:</span>
+                      <p className={`font-sans leading-relaxed opacity-90`}><MathText text={q.solution_explanation} /></p>
                     </div>
                   )}
                 </div>
@@ -1736,37 +1777,43 @@ if (stage === 'exam') {
 
   if (stage === 'swot') {
     return (
-      <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 flex flex-col items-center font-sans">
-        <div className="w-full max-w-2xl bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl space-y-6">
-          <div className="flex justify-between items-center border-b border-white/10 pb-4">
-            <h2 className="text-xl font-black font-['Archivo_Black'] tracking-tight text-purple-400">SWOT ANALYTICS REPORT</h2>
+      <div className={`flex-1 p-6 sm:p-12 flex flex-col items-center font-sans transition-colors duration-200 ${
+        isDark ? 'bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)]' : isMono ? 'bg-white text-black' : 'bg-slate-50 text-slate-900'
+      }`}>
+        <div className={`border rounded-3xl p-8 shadow-sm w-full max-w-2xl space-y-6 ${
+          isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-white border-slate-200 shadow-xl'
+        }`}>
+          <div className={`flex justify-between items-center border-b pb-4 ${isDark ? 'border-white/10' : isMono ? 'border-black' : 'border-slate-200'}`}>
+            <h2 className={`text-xl font-black tracking-tight ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>SWOT ANALYTICS REPORT</h2>
             <button
               onClick={() => setStage('result')}
-              className="px-4 py-2 bg-[oklch(0.16_0.03_265)] hover:bg-[oklch(0.16_0.03_265)]/80 border border-white/10 font-mono text-xs uppercase tracking-wider font-bold rounded-xl transition cursor-pointer"
+              className={`px-4 py-2 border font-mono text-xs uppercase tracking-wider font-bold rounded-full transition cursor-pointer ${
+                isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 hover:bg-[oklch(0.16_0.03_265)]/80 text-white' : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-slate-100 border-slate-300 hover:bg-slate-200 text-slate-700'
+              }`}
             >
               ← Back
             </button>
           </div>
 
           <div className="space-y-4 font-mono text-xs">
-            <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl space-y-1">
-              <h3 className="font-bold text-emerald-400 uppercase tracking-widest">💪 Strengths</h3>
-              <p className="font-sans text-[oklch(0.68_0.04_265)]">High command over core reasoning and quantitative modules.</p>
+            <div className={`p-5 rounded-2xl border space-y-1 ${isMono ? 'border-2 border-black bg-neutral-50 text-black' : 'bg-emerald-500/15 border-emerald-500/30'}`}>
+              <h3 className="font-bold uppercase tracking-widest">💪 Strengths</h3>
+              <p className="font-sans opacity-90">High command over core reasoning and quantitative modules.</p>
             </div>
 
-            <div className="p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-1">
-              <h3 className="font-bold text-amber-400 uppercase tracking-widest">⚠️ Weaknesses</h3>
-              <p className="font-sans text-[oklch(0.68_0.04_265)]">Calculation-heavy items required excessive time allocations.</p>
+            <div className={`p-5 rounded-2xl border space-y-1 ${isMono ? 'border-2 border-black bg-neutral-100 text-black' : 'bg-amber-500/15 border-amber-500/30'}`}>
+              <h3 className="font-bold uppercase tracking-widest">⚠️ Weaknesses</h3>
+              <p className="font-sans opacity-90">Calculation-heavy items required excessive time allocations.</p>
             </div>
 
-            <div className="p-5 bg-blue-500/10 border border-blue-500/30 rounded-2xl space-y-1">
-              <h3 className="font-bold text-blue-400 uppercase tracking-widest">🎯 Opportunities</h3>
-              <p className="font-sans text-[oklch(0.68_0.04_265)]">Improve reading comprehension pacing to secure quick points.</p>
+            <div className={`p-5 rounded-2xl border space-y-1 ${isMono ? 'border-2 border-black bg-neutral-50 text-black' : 'bg-blue-500/15 border-blue-500/30'}`}>
+              <h3 className="font-bold uppercase tracking-widest">🎯 Opportunities</h3>
+              <p className="font-sans opacity-90">Improve reading comprehension pacing to secure quick points.</p>
             </div>
 
-            <div className="p-5 bg-rose-500/10 border border-rose-500/30 rounded-2xl space-y-1">
-              <h3 className="font-bold text-rose-400 uppercase tracking-widest">🚨 Threats</h3>
-              <p className="font-sans text-[oklch(0.68_0.04_265)]">Negative marking exposure from uncalculated guesswork.</p>
+            <div className={`p-5 rounded-2xl border space-y-1 ${isMono ? 'border-2 border-black bg-neutral-100 text-black' : 'bg-rose-500/15 border-rose-500/30'}`}>
+              <h3 className="font-bold uppercase tracking-widest">🚨 Threats</h3>
+              <p className="font-sans opacity-90">Negative marking exposure from uncalculated guesswork.</p>
             </div>
           </div>
         </div>
@@ -1776,4 +1823,3 @@ if (stage === 'exam') {
 
   return null;
 }
-
