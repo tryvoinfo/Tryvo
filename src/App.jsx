@@ -6,12 +6,15 @@ import AdminCurriculumBuilder from './components/AdminCurriculumBuilder';
 import AdminExamCreator from './components/AdminExamCreator';
 import AdminUserAllocator from './components/AdminUserAllocator';
 import AdminQuestionManager from './components/AdminQuestionManager';
+import AdminUserActivity from './components/AdminUserActivity';
 import UserAnalytics from './components/UserAnalytics';
 import ChangePasswordModal from './components/ChangePasswordModal';
+import StudyMaterialPortal from './components/StudyMaterialPortal';
+import AdminStudyMaterialUploader from './components/AdminStudyMaterialUploader';
 
 const supabaseUrl = 'https://wbcdiewohpngqbeqrfmb.supabase.co';
-const supabaseAnonKey = 'sb_publishable_d21wos13j9x7K-w1h8vsvw_0gPm_jlY';
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+   const supabaseAnonKey = 'sb_publishable_d21wos13j9x7K-w1h8vsvw_0gPm_jlY';
+   const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const getThemeClasses = (theme) => {
   switch (theme) {
@@ -61,8 +64,10 @@ function AdminPortalWrapper({ theme }) {
           { id: 'organogram', label: '🌳 Organogram Studio' },
           { id: 'excel', label: '📊 Bulk Excel Uploader' },
           { id: 'exams', label: '📝 Create New Exam' },
+          { id: 'materials', label: '📚 Study Materials' },
           { id: 'access', label: '🛡️ Access Control & Exams' },
-          { id: 'qmanager', label: '📋 Question Manager' }
+          { id: 'qmanager', label: '📋 Question Manager' },
+          { id: 'activity', label: '📈 User Activity' }
         ].map(tab => (
           <button
             key={tab.id}
@@ -82,8 +87,10 @@ function AdminPortalWrapper({ theme }) {
         {adminTab === 'organogram' && <AdminCurriculumBuilder />}
         {adminTab === 'excel' && <BulkExcelUploader />}
         {adminTab === 'exams' && <AdminExamCreator />}
+        {adminTab === 'materials' && <AdminStudyMaterialUploader theme={theme} />}
         {adminTab === 'access' && <AdminUserAllocator />}
         {adminTab === 'qmanager' && <AdminQuestionManager />}
+        {adminTab === 'activity' && <AdminUserActivity />}
       </div>
     </div>
   );
@@ -96,12 +103,10 @@ export default function App() {
   const [examPortalResetKey, setExamPortalResetKey] = useState(0);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   
-  // Theme state: 'dark' | 'light-blue' | 'light-mono'
   const [theme, setTheme] = useState('dark');
   const t = getThemeClasses(theme);
   const isDark = theme === 'dark';
 
-  // Login Form States
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -139,6 +144,28 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+
+    const logUserAccess = async () => {
+      const userId = user.id;
+      const userEmail = user.email || user.user_metadata?.email;
+
+      const sessionKey = `logged_access_${userId}`;
+      if (sessionStorage.getItem(sessionKey)) return;
+
+      const { error } = await supabase.from('user_access_logs').insert([
+        { user_id: userId, user_email: userEmail }
+      ]);
+
+      if (!error) {
+        sessionStorage.setItem(sessionKey, 'true');
+      }
+    };
+
+    logUserAccess();
+  }, [user]);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -151,7 +178,7 @@ export default function App() {
         .from('allowed_users')
         .select('email')
         .eq('email', cleanEmail)
-        .single();
+        .maybeSingle();
 
       if (whitelistError || !whitelist) {
         throw new Error('Access denied. Your email is not authorized by the administrator.');
@@ -206,7 +233,6 @@ export default function App() {
     );
   }
 
-  // Pre-Login Page
   if (!user) {
     return (
       <div className={`min-h-screen flex flex-col font-sans relative overflow-x-hidden transition-colors duration-200 ${t.bg}`}>
@@ -245,7 +271,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* Marquee Banner */}
         <div className={`font-mono text-xs font-bold uppercase py-2.5 px-4 overflow-hidden whitespace-nowrap relative z-20 shadow-xs ${
           isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)]' : theme === 'light-mono' ? 'bg-black text-white' : 'bg-indigo-600 text-white'
         }`}>
@@ -337,7 +362,6 @@ export default function App() {
     );
   }
 
-  // Post-Login Page
   return (
     <div className={`min-h-screen flex flex-col font-sans transition-colors duration-200 ${t.bg}`}>
       <header className={`relative z-20 backdrop-blur-xl border-b px-6 sm:px-12 py-4 flex justify-between items-center transition-colors duration-200 ${t.header}`}>
@@ -391,12 +415,7 @@ export default function App() {
         {currentView === 'exam' && <ExamPortal key={examPortalResetKey} theme={theme} />}
         {currentView === 'admin' && <AdminPortalWrapper theme={theme} />}
         {currentView === 'analytics' && <UserAnalytics user={user} theme={theme} />}
-        {currentView === 'STUDY MATERIAL' && (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
-            <h1 className={`text-3xl font-extrabold ${t.accentText}`}>Under Construction</h1>
-            <p className="font-mono text-sm uppercase opacity-70">Check back soon for curated study materials!</p>
-          </div>
-        )}
+        {currentView === 'STUDY MATERIAL' && <StudyMaterialPortal theme={theme} user={user} />}
         {currentView === 'about' && (
           <div className="flex-1 flex flex-col items-center justify-start p-12 max-w-3xl mx-auto space-y-6 text-center">
             <h1 className={`text-4xl font-black ${t.accentText}`}>About Tryvo</h1>

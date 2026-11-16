@@ -38,7 +38,7 @@ export default function AdminCurriculumBuilder() {
     { id: 'sub_syl', name: 'Syllogism', category: 'Reasoning Ability' }
   ]);
 
-  // 3-Tier Tree Structure: [ { categoryName: 'Numerical Ability', subtopics: [...] } ]
+  // 3-Tier Tree Structure
   const [examTree, setExamTree] = useState([]);
   const [sectionsMap, setSectionsMap] = useState({});
   const [loading, setLoading] = useState(false);
@@ -50,43 +50,40 @@ export default function AdminCurriculumBuilder() {
   const [editDuration, setEditDuration] = useState(60);
   const [editSections, setEditSections] = useState([]);
 
-  // Auto-balancing proportional slider weight handler
   // Auto-balancing proportional slider weight handler with explicit 100% boundary locking
-// 1. Updated handleWeightChange function with strict boundary locking and normalization
-const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
-  const targetVal = Math.max(0, Math.min(100, Number(newPercentage)));
-  const updatedWeights = { ...subWeights, [changedSubId]: targetVal };
+  const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
+    const targetVal = Math.max(0, Math.min(100, Number(newPercentage)));
+    const updatedWeights = { ...subWeights, [changedSubId]: targetVal };
 
-  const otherSubIds = categorySubtopics.map(s => s.id).filter(sId => sId !== changedSubId);
+    const otherSubIds = categorySubtopics.map(s => s.id).filter(sId => sId !== changedSubId);
 
-  if (targetVal === 100) {
-    otherSubIds.forEach(sId => {
-      updatedWeights[sId] = 0;
-    });
-  } else if (otherSubIds.length > 0) {
-    const remainingPool = 100 - targetVal;
-    const defaultShare = remainingPool / otherSubIds.length;
-    const currentOtherSum = otherSubIds.reduce((sum, sId) => sum + (subWeights[sId] !== undefined ? subWeights[sId] : defaultShare), 0);
+    if (targetVal === 100) {
+      otherSubIds.forEach(sId => {
+        updatedWeights[sId] = 0;
+      });
+    } else if (otherSubIds.length > 0) {
+      const remainingPool = 100 - targetVal;
+      const defaultShare = remainingPool / otherSubIds.length;
+      const currentOtherSum = otherSubIds.reduce((sum, sId) => sum + (subWeights[sId] !== undefined ? subWeights[sId] : defaultShare), 0);
 
-    otherSubIds.forEach(sId => {
-      const oldVal = subWeights[sId] !== undefined ? subWeights[sId] : defaultShare;
-      if (currentOtherSum > 0) {
-        updatedWeights[sId] = Number(((oldVal / currentOtherSum) * remainingPool).toFixed(1));
-      } else {
-        updatedWeights[sId] = Number(defaultShare.toFixed(1));
+      otherSubIds.forEach(sId => {
+        const oldVal = subWeights[sId] !== undefined ? subWeights[sId] : defaultShare;
+        if (currentOtherSum > 0) {
+          updatedWeights[sId] = Number(((oldVal / currentOtherSum) * remainingPool).toFixed(1));
+        } else {
+          updatedWeights[sId] = Number(defaultShare.toFixed(1));
+        }
+      });
+
+      const totalSum = targetVal + otherSubIds.reduce((sum, sId) => sum + updatedWeights[sId], 0);
+      if (totalSum !== 100) {
+        const diff = Number((100 - totalSum).toFixed(1));
+        updatedWeights[otherSubIds[0]] = Math.max(0, Number((updatedWeights[otherSubIds[0]] + diff).toFixed(1)));
       }
-    });
-
-    // Final precision correction check to ensure sum equals exactly 100%
-    const totalSum = targetVal + otherSubIds.reduce((sum, sId) => sum + updatedWeights[sId], 0);
-    if (totalSum !== 100) {
-      const diff = Number((100 - totalSum).toFixed(1));
-      updatedWeights[otherSubIds[0]] = Math.max(0, Number((updatedWeights[otherSubIds[0]] + diff).toFixed(1)));
     }
-  }
 
-  setSubWeights(updatedWeights);
-};
+    setSubWeights(updatedWeights);
+  };
 
   // Fetch initial data from Supabase
   const fetchBlueprintData = async () => {
@@ -154,6 +151,7 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
       return {
         name: sec.section_name,
         section_id: secId,
+        no_of_questions: sec.no_of_questions !== undefined ? sec.no_of_questions : 20,
         subtopics: matchedSubs.map(s => ({ id: s.id, name: s.name }))
       };
     });
@@ -172,7 +170,7 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
 
     const category = draggedItem.item;
     if (!examTree.some(c => c.name.toLowerCase() === category.name.toLowerCase())) {
-      setExamTree([...examTree, { name: category.name, subtopics: [] }]);
+      setExamTree([...examTree, { name: category.name, no_of_questions: 20, subtopics: [] }]);
     }
     setDraggedItem(null);
   };
@@ -205,7 +203,7 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
     }
   };
 
-  // Save 3-tier hierarchy to Supabase
+  // Save 3-tier hierarchy to Supabase using dynamic question counts
   const handleSaveBlueprint = async () => {
     setLoading(true);
     try {
@@ -213,13 +211,15 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
 
       for (const cat of examTree) {
         const secId = cat.section_id || `${selectedExamId}_${Math.random().toString(36).substring(2, 7)}`;
+        const qCount = Number(cat.no_of_questions) || 20;
+
         const { error: secErr } = await supabase.from('exam_sections').upsert([
           {
             section_id: secId,
             exam_id: selectedExamId,
             section_name: cat.name,
-            no_of_questions: 35,
-            maximum_marks: 35,
+            no_of_questions: qCount,
+            maximum_marks: qCount,
             duration_minutes: 20,
             section_duration_minutes: 20
           }
@@ -268,10 +268,13 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
 
       for (const sec of editSections) {
         const secId = sec.section_id || sec.id;
+        const qCount = Number(sec.no_of_questions) || 20;
         await supabase.from('exam_sections').update({
           section_name: sec.section_name,
-          no_of_questions: Number(sec.no_of_questions),
-          duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20)
+          no_of_questions: qCount,
+          maximum_marks: qCount,
+          duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20),
+          section_duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20)
         }).eq('section_id', secId);
       }
 
@@ -446,69 +449,83 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
                       onDrop={(e) => handleDropOnCategory(e, cat.name)}
                       className="bg-[oklch(0.16_0.03_265)] border border-white/15 rounded-2xl p-5 space-y-4 shadow-lg relative"
                     >
-                      {/* Tier 2 Header: Category */}
-                      <div className="flex justify-between items-center border-b border-white/10 pb-3">
-                        <span className="font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider">
+                      {/* Tier 2 Header: Category & Question Count Input */}
+                      <div className="flex justify-between items-center border-b border-white/10 pb-3 gap-2">
+                        <span className="font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider truncate">
                           📂 {cat.name}
                         </span>
-                        <button
-                          onClick={() => removeItem(cIdx)}
-                          className="text-rose-400 hover:text-rose-300 font-bold text-xs cursor-pointer"
-                        >
-                          ✕ Remove
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1 font-mono text-[10px]">
+                            <span className="text-[oklch(0.68_0.04_265)]">Qs:</span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="200"
+                              value={cat.no_of_questions !== undefined ? cat.no_of_questions : 20}
+                              onChange={(e) => {
+                                cat.no_of_questions = Number(e.target.value);
+                                setExamTree([...examTree]);
+                              }}
+                              className="w-14 bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-lg px-2 py-1 text-white font-bold text-center"
+                            />
+                          </div>
+                          <button
+                            onClick={() => removeItem(cIdx)}
+                            className="text-rose-400 hover:text-rose-300 font-bold text-xs cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
 
                       {/* Tier 3 Container: Subtopics with Percentage Sliders */}
-                      {/* Tier 3 Container: Subtopics with Percentage Sliders */}
-<div className="space-y-2.5 min-h-[70px] p-2 bg-white/5 rounded-xl border border-dashed border-white/10">
-  {cat.subtopics.length === 0 ? (
-    <div className="text-center py-4 text-[oklch(0.68_0.04_265)] text-[11px] italic">
-      Drop subtopics here
-    </div>
-  ) : (
-    cat.subtopics.map((sub, sIdx) => {
-      const sId = sub.id;
-      // Ensure equal initial distribution if state isn't set yet
-      const defaultVal = Math.round(100 / cat.subtopics.length);
-      const currentWeight = subWeights[sId] !== undefined ? subWeights[sId] : defaultVal;
+                      <div className="space-y-2.5 min-h-[70px] p-2 bg-white/5 rounded-xl border border-dashed border-white/10">
+                        {cat.subtopics.length === 0 ? (
+                          <div className="text-center py-4 text-[oklch(0.68_0.04_265)] text-[11px] italic">
+                            Drop subtopics here
+                          </div>
+                        ) : (
+                          cat.subtopics.map((sub, sIdx) => {
+                            const sId = sub.id;
+                            const defaultVal = Math.round(100 / cat.subtopics.length);
+                            const currentWeight = subWeights[sId] !== undefined ? subWeights[sId] : defaultVal;
 
-      return (
-        <div
-          key={sId}
-          className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-3 rounded-xl space-y-2"
-        >
-          <div className="flex justify-between items-center">
-            <span className="font-bold text-[oklch(0.96_0.012_265)]">↳ 📄 {sub.name}</span>
-            <div className="flex items-center gap-2">
-              <span className="text-[oklch(0.94_0.21_118)] font-extrabold px-2 py-0.5 bg-[oklch(0.94_0.21_118)]/10 rounded-lg text-xs">
-                {currentWeight}%
-              </span>
-              <button
-                onClick={() => removeItem(cIdx, sIdx)}
-                className="text-rose-400 hover:text-rose-300 text-[10px] cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
+                            return (
+                              <div
+                                key={sId}
+                                className="bg-[oklch(0.23_0.045_265)] border border-white/10 p-3 rounded-xl space-y-2"
+                              >
+                                <div className="flex justify-between items-center">
+                                  <span className="font-bold text-[oklch(0.96_0.012_265)]">↳ 📄 {sub.name}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[oklch(0.94_0.21_118)] font-extrabold px-2 py-0.5 bg-[oklch(0.94_0.21_118)]/10 rounded-lg text-xs">
+                                      {currentWeight}%
+                                    </span>
+                                    <button
+                                      onClick={() => removeItem(cIdx, sIdx)}
+                                      className="text-rose-400 hover:text-rose-300 text-[10px] cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                </div>
 
-          <div className="flex items-center gap-2">
-            <input 
-              type="range" 
-              min="0" 
-              max="100" 
-              step="1"
-              value={currentWeight}
-              onChange={(e) => handleWeightChange(sId, e.target.value, cat.subtopics)}
-              className="w-full accent-[oklch(0.94_0.21_118)] cursor-pointer h-1.5 bg-white/10 rounded-lg"
-            />
-          </div>
-        </div>
-      );
-    })
-  )}
-</div>
+                                <div className="flex items-center gap-2">
+                                  <input 
+                                    type="range" 
+                                    min="0" 
+                                    max="100" 
+                                    step="1"
+                                    value={currentWeight}
+                                    onChange={(e) => handleWeightChange(sId, e.target.value, cat.subtopics)}
+                                    className="w-full accent-[oklch(0.94_0.21_118)] cursor-pointer h-1.5 bg-white/10 rounded-lg"
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -570,7 +587,7 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
                         ) : (
                           examSections.map((sec, sIdx) => (
                             <span key={sIdx} className="bg-[oklch(0.16_0.03_265)] border border-white/5 text-[oklch(0.96_0.012_265)] px-2.5 py-1 rounded-lg text-[11px]">
-                              {cleanText(sec.section_name)} ({sec.no_of_questions || 35} Qs)
+                              {cleanText(sec.section_name)} ({sec.no_of_questions || 20} Qs)
                             </span>
                           ))
                         )}
@@ -638,18 +655,34 @@ const handleWeightChange = (changedSubId, newPercentage, categorySubtopics) => {
                 <span className="font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider block">Attached Sections / Categories</span>
                 {editSections.map((sec, idx) => (
                   <div key={idx} className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5 space-y-3">
-                    <div>
-                      <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">Category / Section Name</label>
-                      <input
-                        type="text"
-                        value={sec.section_name}
-                        onChange={(e) => {
-                          const updated = [...editSections];
-                          updated[idx].section_name = e.target.value;
-                          setEditSections(updated);
-                        }}
-                        className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
-                      />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">Category / Section Name</label>
+                        <input
+                          type="text"
+                          value={sec.section_name}
+                          onChange={(e) => {
+                            const updated = [...editSections];
+                            updated[idx].section_name = e.target.value;
+                            setEditSections(updated);
+                          }}
+                          className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">No. of Questions</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={sec.no_of_questions !== undefined ? sec.no_of_questions : 20}
+                          onChange={(e) => {
+                            const updated = [...editSections];
+                            updated[idx].no_of_questions = Number(e.target.value);
+                            setEditSections(updated);
+                          }}
+                          className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
+                        />
+                      </div>
                     </div>
                   </div>
                 ))}

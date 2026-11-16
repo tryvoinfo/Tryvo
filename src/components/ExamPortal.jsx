@@ -184,6 +184,7 @@ export default function ExamPortal({ theme = 'dark' }) {
   const [attemptResult, setAttemptResult] = useState(null);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+  const [examOptionsLimit, setExamOptionsLimit] = useState(4);
 
   const isDark = theme === 'dark';
   const isMono = theme === 'light-mono';
@@ -289,6 +290,7 @@ export default function ExamPortal({ theme = 'dark' }) {
             setExams(filteredExams);
             if (filteredExams.length > 0) {
               setSelectedExamId(filteredExams[0].exam_id || filteredExams[0].id);
+              setExamOptionsLimit(filteredExams[0].options_count || 4);
             }
           } else {
             setExams([]);
@@ -298,7 +300,7 @@ export default function ExamPortal({ theme = 'dark' }) {
         if (subtopicsData && subtopicsData.length > 0) {
           setSubtopics(subtopicsData);
           const firstSub = subtopicsData[0];
-          setSelectedMainCategory(firstSub.category || firstSub.section_name || 'Numerical Ability');
+          setSelectedMainCategory(firstSub.category || firstSub.section_name || 'Technical');
           setSelectedSubtopicId(firstSub.subtopic_id || firstSub.id);
         }
 
@@ -338,24 +340,28 @@ export default function ExamPortal({ theme = 'dark' }) {
 
     try {
       const activeExam = exams.find((e) => (e.exam_id || e.id) === selectedExamId);
+      let targetOptionsCount = 4;
+
       if (activeExam) {
         testDurationMinutes = activeExam.duration_minutes || 60;
+        targetOptionsCount = activeExam.options_count || 4;
       }
+      setExamOptionsLimit(targetOptionsCount);
 
       const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
       const { data: allSubtopics } = await supabase.from('subtopics').select('*');
       const { data: allOptions } = await supabase.from('question_options').select('*').range(0, 9999).limit(5000);
 
+      // Fetch exam sections for the selected exam blueprint
+      const examIdValue = selectedExamId;
+      const { data: sectionsData, error: secError } = await supabase
+        .from('exam_sections')
+        .select('*')
+        .eq('exam_id', examIdValue);
+
+      if (secError) throw secError;
+
       if (testMode === 'Full-Length Mock') {
-        const examIdValue = selectedExamId;
-
-        const { data: sectionsData, error: secError } = await supabase
-          .from('exam_sections')
-          .select('*')
-          .eq('exam_id', examIdValue);
-
-        if (secError) throw secError;
-
         if (!sectionsData || sectionsData.length === 0) {
           alert('No sections defined for this exam blueprint.');
           setLoading(false);
@@ -369,7 +375,7 @@ export default function ExamPortal({ theme = 'dark' }) {
         for (let i = 0; i < sectionsData.length; i++) {
           const sec = sectionsData[i];
           const secId = sec.section_id || sec.id;
-          const quota = sec.no_of_questions || 35;
+          const quota = sec.no_of_questions || 20;
           const secNameLower = (sec.section_name || '').toLowerCase();
 
           initialSectionTimes[secId] = sec.duration_minutes ? sec.duration_minutes * 60 : defaultSecDurationSecs;
@@ -387,16 +393,7 @@ export default function ExamPortal({ theme = 'dark' }) {
             qData = allQuestions.filter(q => {
               const subObj = allSubtopics?.find(s => (s.subtopic_id || s.id) === q.subtopic_id);
               const subName = (subObj?.subtopic_name || '').toLowerCase();
-              
-              if (secNameLower.includes('english')) {
-                return subName.includes('cloze') || subName.includes('reading') || subName.includes('error') || subName.includes('vocab');
-              } else if (secNameLower.includes('numerical') || secNameLower.includes('quant')) {
-                return subName.includes('approxi') || subName.includes('average') || subName.includes('series') || subName.includes('profit') || subName.includes('ratio');
-              } else if (secNameLower.includes('reasoning')) {
-                return subName.includes('puzzle') || subName.includes('seating') || subName.includes('syllogism') || subName.includes('blood');
-              } else {
-                return false;
-              }
+              return subName.includes(secNameLower.split(' ')[0]);
             });
           }
 
@@ -414,7 +411,7 @@ export default function ExamPortal({ theme = 'dark' }) {
             return {
               ...q,
               question_id: qId,
-              question_options: rawOpts.length > 0 ? shuffleArray(rawOpts) : []
+              question_options: rawOpts.length > 0 ? shuffleArray(rawOpts).slice(0, targetOptionsCount) : []
             };
           });
         }
@@ -437,46 +434,46 @@ export default function ExamPortal({ theme = 'dark' }) {
       else if (testMode === 'Time-Based Practice') {
         testDurationMinutes = Number(practiceMinutes);
         const totalSeconds = testDurationMinutes * 60;
-        const timePerCategory = totalSeconds / 3;
 
-        const englishQuota = Math.max(1, Math.floor(timePerCategory / 30));
-        const numericalQuota = Math.max(1, Math.floor(timePerCategory / 40));
-        const reasoningQuota = Math.max(1, Math.floor(timePerCategory / 40));
-
-        const sprintSections = [
-          { section_id: 'SPRINT_ENG', section_name: 'English Language', quota: englishQuota, timeSec: timePerCategory },
-          { section_id: 'SPRINT_NUM', section_name: 'Numerical Ability', quota: numericalQuota, timeSec: timePerCategory },
-          { section_id: 'SPRINT_REA', section_name: 'Reasoning Ability', quota: reasoningQuota, timeSec: timePerCategory }
+        // Use dynamic sections from the exam blueprint if available, otherwise fallback
+        const activeSprintSections = (sectionsData && sectionsData.length > 0) ? sectionsData : [
+          { section_id: 'SPRINT_DEF', section_name: 'Practice Module', no_of_questions: 10 }
         ];
 
-        if (!allQuestions || allQuestions.length === 0) {
-          alert('No questions found in database.');
-          setLoading(false);
-          return;
-        }
-
+        const timePerCategory = totalSeconds / activeSprintSections.length;
         let finalSectionMap = {};
         let initialSectionTimes = {};
 
-        sprintSections.forEach(sec => {
-          initialSectionTimes[sec.section_id] = sec.timeSec;
-          const targetKey = sec.section_name.toLowerCase().split(' ')[0];
+        activeSprintSections.forEach(sec => {
+          const secId = sec.section_id || sec.id;
+          initialSectionTimes[secId] = timePerCategory;
+          const quota = sec.no_of_questions || 10;
+          const secNameLower = (sec.section_name || '').toLowerCase();
 
           let matchingSubs = allSubtopics?.filter(s => {
-            const name = (s.subtopic_name || s.name || '').toLowerCase();
-            const cat = (s.category || s.section_name || '').toLowerCase();
-            return name.includes(targetKey) || cat.includes(targetKey);
+            const sSecId = String(s.section_id || '').toLowerCase();
+            const sCat = (s.category || '').toLowerCase();
+            const sName = (s.subtopic_name || s.name || '').toLowerCase();
+            return sSecId === String(secId).toLowerCase() || sCat.includes(secNameLower) || sName.includes(secNameLower);
           })?.map(s => s.subtopic_id || s.id) || [];
           
           let secQuestions = allQuestions.filter(q => matchingSubs.includes(q.subtopic_id));
           
           if (secQuestions.length === 0 && allQuestions.length > 0) {
+            secQuestions = allQuestions.filter(q => {
+              const subObj = allSubtopics?.find(s => String(s.subtopic_id || s.id) === String(q.subtopic_id));
+              const subName = (subObj?.subtopic_name || subObj?.name || '').toLowerCase();
+              return subName.includes(secNameLower) || secNameLower.includes(subName);
+            });
+          }
+
+          if (secQuestions.length === 0) {
             secQuestions = allQuestions;
           }
 
-          const shuffled = groupPassageQuestions(shuffleArray(secQuestions)).slice(0, sec.quota);
+          const shuffled = groupPassageQuestions(shuffleArray(secQuestions)).slice(0, quota);
           
-          finalSectionMap[sec.section_id] = shuffled.map(q => {
+          finalSectionMap[secId] = shuffled.map(q => {
             const qId = q.question_id || q.id;
             const rawOpts = (allOptions || []).filter(o => {
               const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
@@ -486,12 +483,12 @@ export default function ExamPortal({ theme = 'dark' }) {
             return {
               ...q,
               question_id: qId,
-              question_options: rawOpts.length > 0 ? shuffleArray(rawOpts) : []
+              question_options: rawOpts.length > 0 ? shuffleArray(rawOpts).slice(0, targetOptionsCount) : []
             };
           });
         });
 
-        setSections(sprintSections);
+        setSections(activeSprintSections);
         setSectionQuestionsMap(finalSectionMap);
         setSectionTimeLefts(initialSectionTimes);
         setCompletedSections(new Set());
@@ -501,25 +498,25 @@ export default function ExamPortal({ theme = 'dark' }) {
         setUserAnswers({});
         setQuestionTimers({});
         setReviewStatus({});
-        const firstSecId = sprintSections[0].section_id;
+        const firstSecId = activeSprintSections[0].section_id || activeSprintSections[0].id;
         const firstQId = finalSectionMap[firstSecId]?.[0]?.question_id;
         setVisitedQuestions(firstQId ? new Set([firstQId]) : new Set());
         setStage('exam');
       }
       else {
-        // Topic-Based Drill
-        testDurationMinutes = 15;
+        // Topic-Based Drill (Limited to 20 randomized questions)
+        testDurationMinutes = 30;
         
         const selectedSub = subtopics.find(s => (s.subtopic_id || s.id) === selectedSubtopicId);
         const subName = (selectedSub?.subtopic_name || selectedSub?.name || '').toLowerCase();
 
         let loadedQuestions = [];
 
-        // STRICT CHECK: Only load DI table if subtopic explicitly equals Data Interpretation (removed "testing")
         if (subName === 'data interpretation (di)' || subName === 'di') {
           const { data: diData } = await supabase.from('di_questions').select('*');
           if (diData && diData.length > 0) {
-            loadedQuestions = diData.map((di) => {
+            const shuffledDi = shuffleArray(diData);
+            loadedQuestions = shuffledDi.slice(0, 20).map((di) => {
               let parsedOptions = [];
               try {
                 parsedOptions = typeof di.options === 'string' ? JSON.parse(di.options) : di.options;
@@ -527,7 +524,7 @@ export default function ExamPortal({ theme = 'dark' }) {
                 parsedOptions = [];
               }
 
-              const formattedOptions = parsedOptions.map((optText, oIdx) => ({
+              const formattedOptions = parsedOptions.slice(0, targetOptionsCount).map((optText, oIdx) => ({
                 id: `di_opt_${oIdx}`,
                 option_text: optText,
                 is_correct: oIdx === 1
@@ -545,14 +542,29 @@ export default function ExamPortal({ theme = 'dark' }) {
             });
           }
         } else {
-          // STRICT SUBTOPIC FILTERING: Query standard questions table using exact selectedSubtopicId
-          const { data: qData, error: qErr } = await supabase
+          // Robust Topic Drill Query: match by subtopic_id or subtopic name
+          const selectedSubObj = subtopics.find(s => String(s.subtopic_id || s.id) === String(selectedSubtopicId));
+          const subNameClean = (selectedSubObj?.subtopic_name || selectedSubObj?.name || '').trim();
+
+          let qData = [];
+          const { data: qById, error: err1 } = await supabase
             .from('questions')
             .select('*, passages(*)')
             .eq('subtopic_id', selectedSubtopicId);
 
-          if (qErr) throw qErr;
-          loadedQuestions = groupPassageQuestions(shuffleArray(qData || []));
+          if (qById && qById.length > 0) {
+            qData = qById;
+          } else if (subNameClean) {
+            const { data: qByName } = await supabase
+              .from('questions')
+              .select('*, passages(*)')
+              .ilike('subtopic_name', subNameClean);
+            
+            if (qByName) qData = qByName;
+          }
+
+          const shuffled = (qData || []).sort(() => 0.5 - Math.random());
+          loadedQuestions = shuffled.slice(0, 20);
         }
 
         if (loadedQuestions.length === 0) {
@@ -573,7 +585,7 @@ export default function ExamPortal({ theme = 'dark' }) {
           return {
             ...q,
             question_id: qId,
-            question_options: rawOpts.length > 0 ? shuffleArray(rawOpts) : []
+            question_options: rawOpts.length > 0 ? shuffleArray(rawOpts).slice(0, targetOptionsCount) : []
           };
         });
 
@@ -876,7 +888,7 @@ export default function ExamPortal({ theme = 'dark' }) {
       } else if (name.includes('puzzle') || name.includes('seating') || name.includes('syllogism') || name.includes('blood') || name.includes('testing')) {
         return 'Reasoning Ability';
       }
-      return 'General Awareness / Other';
+      return 'Technical';
     };
     const mainCategories = [...new Set(subtopics.map(sub => getSubtopicCategory(sub)))];
     
@@ -897,7 +909,7 @@ export default function ExamPortal({ theme = 'dark' }) {
           isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] shadow-[0_0_20px_rgba(204,255,0,0.25)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-slate-950 text-white shadow-xs'
         }`}>
           <div className="inline-block animate-[marquee_25s_linear_infinite]">
-            SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now! &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; SBI Clerk 2026 Exam Dates: Prelims on Sept 26 & 27 | Mains on Nov 23 — Start Your Prep Now!
+            Success is the sum of small efforts, repeated day in and day out. — Robert Collier &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; It always seems impossible until it is done. — Nelson Mandela
           </div>
         </div>
 
@@ -954,7 +966,7 @@ export default function ExamPortal({ theme = 'dark' }) {
                     : 'bg-red-600 text-white hover:bg-red-700'
                 }`}
               >
-                SBI →
+                Systems →
               </button>
             </div>
           </div>
@@ -980,12 +992,19 @@ export default function ExamPortal({ theme = 'dark' }) {
                         : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-red-600'
                     }`}
                     value={selectedExamId}
-                    onChange={(e) => setSelectedExamId(e.target.value)}
+                    onChange={(e) => {
+                      const selectedId = e.target.value;
+                      setSelectedExamId(selectedId);
+                      const foundEx = exams.find(ex => String(ex.exam_id || ex.id) === String(selectedId));
+                      if (foundEx) {
+                        setExamOptionsLimit(foundEx.options_count || 4);
+                      }
+                    }}
                   >
                     {exams.length > 0 ? (
                       exams.map((ex) => (
                         <option key={ex.exam_id || ex.id} value={ex.exam_id || ex.id}>
-                          {cleanText(ex.exam_name || ex.name)}
+                          {cleanText(ex.exam_name || ex.name)} ({ex.options_count || 4} Options)
                         </option>
                       ))
                     ) : (
@@ -1086,7 +1105,7 @@ export default function ExamPortal({ theme = 'dark' }) {
                         onChange={(e) => {
                           const newCat = e.target.value;
                           setSelectedMainCategory(newCat);
-                          const matchingSubs = subtopics.filter(sub => (sub.category || sub.section_name || 'General') === newCat);
+                          const matchingSubs = subtopics.filter(sub => (sub.category || sub.section_name || 'Technical') === newCat);
                           if (matchingSubs.length > 0) {
                             setSelectedSubtopicId(matchingSubs[0].subtopic_id || matchingSubs[0].id);
                           }
@@ -1365,7 +1384,7 @@ export default function ExamPortal({ theme = 'dark' }) {
                     </div>
 
                     <div className="space-y-3 pt-2">
-                      {currentQ?.question_options?.map((opt, oIndex) => {
+                      {currentQ?.question_options?.slice(0, examOptionsLimit).map((opt, oIndex) => {
                         const optId = opt.option_id || opt.id;
                         const isChecked = userAnswers[currentQ.question_id] === optId;
                         return (
@@ -1739,7 +1758,7 @@ export default function ExamPortal({ theme = 'dark' }) {
                   <p className="text-base font-medium font-sans"><MathText text={q.question_text} /></p>
 
                   <div className="space-y-2 font-mono text-xs">
-                    {q.question_options?.map((opt, oIndex) => {
+                    {q.question_options?.slice(0, examOptionsLimit).map((opt, oIndex) => {
                       const optId = opt.option_id || opt.id;
                       const isStudentChoice = studentAnswerId === optId;
                       const isRightChoice = opt.is_correct;

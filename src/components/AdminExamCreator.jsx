@@ -1,207 +1,203 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
 
-export default function AdminExamCreator() {
+export default function AdminExamCreator({ theme = 'dark' }) {
   const [examName, setExamName] = useState('');
-  const [examId, setExamId] = useState('');
   const [durationMinutes, setDurationMinutes] = useState(60);
-  const [sections, setSections] = useState([
-    { section_id: 'sec_eng', section_name: 'English Language', no_of_questions: 30, duration_minutes: 20 },
-    { section_id: 'sec_num', section_name: 'Quantitative Aptitude', no_of_questions: 35, duration_minutes: 20 },
-    { section_id: 'sec_rea', section_name: 'Reasoning Ability', no_of_questions: 35, duration_minutes: 20 }
+  const [optionsCount, setOptionsCount] = useState(4); // 👈 State properly declared here
+const [sections, setSections] = useState([
+    { section_id: 'ENG_' + Date.now(), section_name: 'English Language', no_of_questions: 30, duration_minutes: 20 },
+    { section_id: 'NUM_' + (Date.now() + 1), section_name: 'Numerical Ability', no_of_questions: 35, duration_minutes: 20 },
+    { section_id: 'REA_' + (Date.now() + 2), section_name: 'Reasoning Ability', no_of_questions: 35, duration_minutes: 20 }
   ]);
   const [loading, setLoading] = useState(false);
+  const [successMsg, setSuccessMsg] = useState('');
 
-  const handleNameChange = (e) => {
-    const val = e.target.value;
-    setExamName(val);
-    setExamId(val.toLowerCase().replace(/[^a-z0-9]/g, '_'));
+  const isDark = theme === 'dark';
+  const isMono = theme === 'light-mono';
+
+const handleAddSection = () => {
+    setSections([
+      ...sections, 
+      { 
+        section_id: `SEC_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`, 
+        section_name: '', 
+        no_of_questions: 30, 
+        duration_minutes: 20 
+      }
+    ]);
+  };
+
+  const handleRemoveSection = (index) => {
+    setSections(sections.filter((_, i) => i !== index));
   };
 
   const handleSectionChange = (index, field, value) => {
     const updated = [...sections];
     updated[index][field] = value;
-    if (field === 'section_name') {
-      updated[index]['section_id'] = value.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + Math.floor(Math.random() * 1000);
-    }
     setSections(updated);
   };
 
-  const addSection = () => {
-    setSections([...sections, { section_id: 'sec_' + Date.now(), section_name: '', no_of_questions: 35, duration_minutes: 20 }]);
-  };
-
-  const removeSection = (index) => {
-    setSections(sections.filter((_, i) => i !== index));
-  };
-
-  const handleSubmit = async (e) => {
+  const handleCreateExam = async (e) => {
     e.preventDefault();
-    if (!examName || !examId) {
-      alert('Please provide a valid exam name.');
-      return;
-    }
-
     setLoading(true);
-    try {
-      // Automatically calculate total questions and marks from sections
-      const totalQuestionsCount = sections.reduce((sum, sec) => sum + Number(sec.no_of_questions || 0), 0);
-      const totalMarksCount = totalQuestionsCount; // 1 mark per question standard layout
+    setSuccessMsg('');
 
-      // 1. Upsert Exam Blueprint (prevents duplicate key crashes if slug exists)
-      const { error: examError } = await supabase.from('exams').upsert([
-        { 
-          exam_id: examId, 
-          exam_name: examName, 
+    try {
+      const examId = examName.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + Date.now();
+
+      // 1. Insert Exam Blueprint with options_count
+      const { error: examErr } = await supabase.from('exams').insert([
+        {
+          exam_id: examId,
+          exam_name: examName,
           duration_minutes: Number(durationMinutes),
-          total_questions: totalQuestionsCount,
-          total_marks: totalMarksCount
+          options_count: Number(optionsCount)
         }
       ]);
-      if (examError) throw examError;
 
-      // 2. Upsert Sections (mapping both duration fields to prevent any mismatch)
-      const sectionsPayload = sections.map(sec => ({
-        section_id: sec.section_id,
+      if (examErr) throw examErr;
+
+      // 2. Insert Sections (including maximum_marks to satisfy DB constraint)
+      const sectionsToInsert = sections.map(sec => ({
         exam_id: examId,
+        section_id: sec.section_id,
         section_name: sec.section_name,
         no_of_questions: Number(sec.no_of_questions),
-        maximum_marks: Number(sec.no_of_questions), 
         duration_minutes: Number(sec.duration_minutes),
-        section_duration_minutes: Number(sec.duration_minutes) // <--- Adds this to satisfy the database column constraint
+        maximum_marks: Number(sec.no_of_questions)
       }));
 
-      const { error: secError } = await supabase.from('exam_sections').upsert(sectionsPayload);
-      if (secError) throw secError;
+      const { error: secErr } = await supabase.from('exam_sections').insert(sectionsToInsert);
+      if (secErr) throw secErr;
 
-      alert(`Successfully deployed exam blueprint "${examName}" with ${sections.length} sections!`);
+      setSuccessMsg(`✅ Exam blueprint "${examName}" created successfully with ${optionsCount} MCQ options per question!`);
       setExamName('');
-      setExamId('');
-      setSections([
-        { section_id: 'sec_eng', section_name: 'English Language', no_of_questions: 30, duration_minutes: 20 },
-        { section_id: 'sec_num', section_name: 'Quantitative Aptitude', no_of_questions: 35, duration_minutes: 20 },
-        { section_id: 'sec_rea', section_name: 'Reasoning Ability', no_of_questions: 35, duration_minutes: 20 }
-      ]);
     } catch (err) {
       console.error(err);
-      alert('Error creating exam blueprint: ' + err.message);
+      alert('Error creating exam: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="flex-1 bg-[oklch(0.16_0.03_265)] text-[oklch(0.96_0.012_265)] p-6 sm:p-12 font-sans flex flex-col items-center overflow-y-auto">
-      <div className="w-full max-w-3xl bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-3xl p-8 shadow-2xl space-y-6">
-        <div className="border-b border-white/10 pb-4">
-          <span className="font-mono text-xs text-[oklch(0.94_0.21_118)] uppercase tracking-widest font-bold">Admin Studio</span>
-          <h2 className="text-2xl font-black font-['Archivo_Black'] tracking-tight">Create New Exam Blueprint</h2>
-        </div>
+    <div className={`p-8 max-w-4xl mx-auto space-y-8 font-sans ${isDark ? 'text-white' : isMono ? 'text-black' : 'text-slate-900'}`}>
+      <div className={`border p-8 rounded-3xl shadow-xl ${isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10' : isMono ? 'bg-white border-2 border-black' : 'bg-white border-slate-200'}`}>
+        <h2 className={`text-2xl font-black mb-1 ${isDark ? 'text-[oklch(0.94_0.21_118)]' : isMono ? 'text-black underline' : 'text-red-600'}`}>
+          📝 Create New Exam Blueprint
+        </h2>
+        <p className="font-mono text-xs uppercase opacity-75 mb-6">Define blueprint parameters, sections, and MCQ options count.</p>
 
-        <form onSubmit={handleSubmit} className="space-y-6 font-mono text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Exam Name</label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. IBPS PO Prelims"
-                value={examName}
-                onChange={handleNameChange}
-                className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)]"
-              />
-            </div>
-            <div>
-              <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Generated ID / Slug</label>
-              <input
-                type="text"
-                required
-                value={examId}
-                onChange={(e) => setExamId(e.target.value)}
-                className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.68_0.04_265)] focus:outline-none font-mono"
-              />
-            </div>
+        {successMsg && (
+          <div className="p-4 mb-6 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-xs rounded-2xl text-center">
+            {successMsg}
           </div>
+        )}
 
-          <div>
-            <label className="block uppercase tracking-[0.15em] text-[oklch(0.68_0.04_265)] mb-2">Total Duration (Minutes)</label>
-            <input
-              type="number"
-              required
-              value={durationMinutes}
-              onChange={(e) => setDurationMinutes(e.target.value)}
-              className="w-full bg-[oklch(0.16_0.03_265)] border border-white/10 rounded-xl p-3.5 text-sm text-[oklch(0.96_0.012_265)] focus:outline-none focus:border-[oklch(0.94_0.21_118)]"
-            />
+        <form onSubmit={handleCreateExam} className="space-y-6 font-mono text-xs">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block uppercase tracking-[0.15em] mb-2 font-semibold opacity-80">Exam Title</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. SBI Clerk Prelims"
+                value={examName}
+                onChange={(e) => setExamName(e.target.value)}
+                className={`w-full border rounded-xl p-3.5 text-sm focus:outline-none ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-300'}`}
+              />
+            </div>
+            <div>
+              <label className="block uppercase tracking-[0.15em] mb-2 font-semibold opacity-80">Total Duration (Mins)</label>
+              <input
+                type="number"
+                required
+                value={durationMinutes}
+                onChange={(e) => setDurationMinutes(e.target.value)}
+                className={`w-full border rounded-xl p-3.5 text-sm focus:outline-none ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-300'}`}
+              />
+            </div>
+            <div>
+              <label className="block uppercase tracking-[0.15em] mb-2 font-semibold opacity-80">MCQ Options Count</label>
+              <select
+                value={optionsCount}
+                onChange={(e) => setOptionsCount(Number(e.target.value))}
+                className={`w-full border rounded-xl p-3.5 text-sm focus:outline-none cursor-pointer ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-white' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-300'}`}
+              >
+                <option value={4}>4 Options (A - D)</option>
+                <option value={5}>5 Options (A - E)</option>
+              </select>
+            </div>
           </div>
 
           <div className="space-y-4 pt-4 border-t border-white/10">
             <div className="flex justify-between items-center">
-              <span className="font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider">Exam Sections / Modules</span>
+              <h3 className="font-bold uppercase tracking-widest">Exam Sections</h3>
               <button
                 type="button"
-                onClick={addSection}
-                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg uppercase text-[10px] tracking-widest font-bold transition cursor-pointer"
+                onClick={handleAddSection}
+                className={`px-4 py-2 rounded-xl font-bold uppercase transition cursor-pointer border ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/10 text-[oklch(0.94_0.21_118)]' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-slate-100 text-slate-700'}`}
               >
                 + Add Section
               </button>
             </div>
 
-            <div className="space-y-3">
-              {sections.map((sec, idx) => (
-                <div key={idx} className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5 grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
-                  <div className="sm:col-span-5">
-                    <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">Section Name</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. English Language"
-                      value={sec.section_name}
-                      onChange={(e) => handleSectionChange(idx, 'section_name', e.target.value)}
-                      className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">Questions Count</label>
-                    <input
-                      type="number"
-                      required
-                      value={sec.no_of_questions}
-                      onChange={(e) => handleSectionChange(idx, 'no_of_questions', e.target.value)}
-                      className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">Duration (Mins)</label>
-                    <input
-                      type="number"
-                      required
-                      value={sec.duration_minutes}
-                      onChange={(e) => handleSectionChange(idx, 'duration_minutes', e.target.value)}
-                      className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
-                    />
-                  </div>
-                  <div className="sm:col-span-1 flex justify-end pt-4">
-                    {sections.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => removeSection(idx)}
-                        className="text-rose-400 hover:text-rose-300 font-bold p-2 cursor-pointer"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
+            {sections.map((sec, idx) => (
+              <div key={idx} className={`p-4 rounded-2xl border grid grid-cols-1 sm:grid-cols-12 gap-3 items-center ${isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5' : isMono ? 'bg-neutral-50 border-2 border-black' : 'bg-slate-50 border-slate-200'}`}>
+                <div className="sm:col-span-4">
+                  <label className="block text-[10px] uppercase opacity-70 mb-1">Section Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={sec.section_name}
+                    onChange={(e) => handleSectionChange(idx, 'section_name', e.target.value)}
+                    className={`w-full border rounded-lg p-2.5 text-xs ${isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : 'bg-white border-slate-300'}`}
+                  />
                 </div>
-              ))}
-            </div>
+                <div className="sm:col-span-3">
+                  <label className="block text-[10px] uppercase opacity-70 mb-1">No. of Questions</label>
+                  <input
+                    type="number"
+                    required
+                    value={sec.no_of_questions}
+                    onChange={(e) => handleSectionChange(idx, 'no_of_questions', e.target.value)}
+                    className={`w-full border rounded-lg p-2.5 text-xs ${isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : 'bg-white border-slate-300'}`}
+                  />
+                </div>
+                <div className="sm:col-span-3">
+                  <label className="block text-[10px] uppercase opacity-70 mb-1">Duration (Mins)</label>
+                  <input
+                    type="number"
+                    required
+                    value={sec.duration_minutes}
+                    onChange={(e) => handleSectionChange(idx, 'duration_minutes', e.target.value)}
+                    className={`w-full border rounded-lg p-2.5 text-xs ${isDark ? 'bg-[oklch(0.23_0.045_265)] border-white/10 text-white' : 'bg-white border-slate-300'}`}
+                  />
+                </div>
+                <div className="sm:col-span-2 text-right pt-4">
+                  {sections.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSection(idx)}
+                      className="px-3 py-2 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-lg hover:bg-rose-500/20 cursor-pointer"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-4 bg-[oklch(0.94_0.21_118)] hover:brightness-110 text-[oklch(0.16_0.03_265)] font-mono text-xs uppercase tracking-[0.15em] font-extrabold rounded-xl shadow-[0_0_25px_rgba(204,255,0,0.25)] transition cursor-pointer"
+            className={`w-full py-4 font-extrabold uppercase tracking-[0.15em] rounded-2xl transition cursor-pointer shadow-sm ${
+              isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] hover:brightness-110' : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-600 text-white hover:bg-red-700'
+            }`}
           >
-            {loading ? 'DEPLOYING BLUEPRINT...' : 'CREATE EXAM BLUEPRINT →'}
+            {loading ? 'DEPLOYING BLUEPRINT...' : 'PUBLISH EXAM BLUEPRINT →'}
           </button>
         </form>
       </div>

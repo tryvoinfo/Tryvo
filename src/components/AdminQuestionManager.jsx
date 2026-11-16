@@ -52,19 +52,20 @@ export default function AdminQuestionManager() {
         return;
       }
 
-      // 2. Fetch options for these questions
-      const qIds = qData.map(q => q.question_id || q.id).filter(Boolean);
-      let optData = [];
-      if (qIds.length > 0) {
-        const { data: oData, error: optErr } = await supabase
-          .from('question_options')
-          .select('*')
-          .in('question_id', qIds);
+// 2. Fetch options for these questions
+    const qIds = qData.map(q => q.question_id || q.id).filter(Boolean);
+    let optData = [];
+    if (qIds.length > 0) {
+      const { data: oData, error: optErr } = await supabase
+        .from('question_options')
+        .select('*')
+        .in('question_id', qIds)
+        .order('option_index', { ascending: true }); // 👈 Add this line here
 
-        if (!optErr && oData) {
-          optData = oData;
-        }
+      if (!optErr && oData) {
+        optData = oData;
       }
+    }
 
       // 3. Combine safely with null checks
       const formatted = qData.map(q => {
