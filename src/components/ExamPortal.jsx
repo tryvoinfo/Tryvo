@@ -350,9 +350,7 @@ export default function ExamPortal({ theme = 'dark' }) {
 
       const { data: allQuestions } = await supabase.from('questions').select('*, passages(*)');
       const { data: allSubtopics } = await supabase.from('subtopics').select('*');
-      const { data: allOptions } = await supabase.from('question_options').select('*').range(0, 9999).limit(5000);
 
-      // Fetch exam sections for the selected exam blueprint
       const examIdValue = selectedExamId;
       const { data: sectionsData, error: secError } = await supabase
         .from('exam_sections')
@@ -371,6 +369,10 @@ export default function ExamPortal({ theme = 'dark' }) {
         let finalSectionMap = {};
         let initialSectionTimes = {};
         const defaultSecDurationSecs = Math.round((testDurationMinutes * 60) / sectionsData.length);
+
+        // Collect all questions across all sections first to batch-fetch options dynamically
+        let allSelectedQuestions = [];
+        let sectionTempMap = {};
 
         for (let i = 0; i < sectionsData.length; i++) {
           const sec = sectionsData[i];
@@ -401,12 +403,21 @@ export default function ExamPortal({ theme = 'dark' }) {
           const groupedQData = groupPassageQuestions(shuffledQData);
           const limitedQuestions = groupedQData.slice(0, quota);
 
-          finalSectionMap[secId] = limitedQuestions.map(q => {
+          sectionTempMap[secId] = limitedQuestions;
+          allSelectedQuestions.push(...limitedQuestions);
+        }
+
+        // Dynamically fetch options for all selected question IDs (Bypasses 5000-row bulk limit)
+        const questionIds = allSelectedQuestions.map(q => q.question_id || q.id);
+        const { data: matchedOptions } = await supabase
+          .from('question_options')
+          .select('*')
+          .in('question_id', questionIds);
+
+        for (let secId in sectionTempMap) {
+          finalSectionMap[secId] = sectionTempMap[secId].map(q => {
             const qId = q.question_id || q.id;
-            const rawOpts = (allOptions || []).filter(o => {
-              const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
-              return optQId === String(qId).trim() || optQId === String(q.id).trim();
-            });
+            const rawOpts = (matchedOptions || []).filter(o => String(o.question_id || o.qid || '').trim() === String(qId).trim());
 
             return {
               ...q,
@@ -435,7 +446,6 @@ export default function ExamPortal({ theme = 'dark' }) {
         testDurationMinutes = Number(practiceMinutes);
         const totalSeconds = testDurationMinutes * 60;
 
-        // Use dynamic sections from the exam blueprint if available, otherwise fallback
         const activeSprintSections = (sectionsData && sectionsData.length > 0) ? sectionsData : [
           { section_id: 'SPRINT_DEF', section_name: 'Practice Module', no_of_questions: 10 }
         ];
@@ -443,6 +453,8 @@ export default function ExamPortal({ theme = 'dark' }) {
         const timePerCategory = totalSeconds / activeSprintSections.length;
         let finalSectionMap = {};
         let initialSectionTimes = {};
+        let allSprintQuestions = [];
+        let sprintTempMap = {};
 
         activeSprintSections.forEach(sec => {
           const secId = sec.section_id || sec.id;
@@ -472,13 +484,20 @@ export default function ExamPortal({ theme = 'dark' }) {
           }
 
           const shuffled = groupPassageQuestions(shuffleArray(secQuestions)).slice(0, quota);
-          
-          finalSectionMap[secId] = shuffled.map(q => {
+          sprintTempMap[secId] = shuffled;
+          allSprintQuestions.push(...shuffled);
+        });
+
+        const sprintQIds = allSprintQuestions.map(q => q.question_id || q.id);
+        const { data: sprintOptions } = await supabase
+          .from('question_options')
+          .select('*')
+          .in('question_id', sprintQIds);
+
+        for (let secId in sprintTempMap) {
+          finalSectionMap[secId] = sprintTempMap[secId].map(q => {
             const qId = q.question_id || q.id;
-            const rawOpts = (allOptions || []).filter(o => {
-              const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
-              return optQId === String(qId).trim() || optQId === String(q.id).trim();
-            });
+            const rawOpts = (sprintOptions || []).filter(o => String(o.question_id || o.qid || '').trim() === String(qId).trim());
 
             return {
               ...q,
@@ -486,7 +505,7 @@ export default function ExamPortal({ theme = 'dark' }) {
               question_options: rawOpts.length > 0 ? shuffleArray(rawOpts).slice(0, targetOptionsCount) : []
             };
           });
-        });
+        }
 
         setSections(activeSprintSections);
         setSectionQuestionsMap(finalSectionMap);
@@ -504,7 +523,6 @@ export default function ExamPortal({ theme = 'dark' }) {
         setStage('exam');
       }
       else {
-        // Topic-Based Drill (Limited to 20 randomized questions)
         testDurationMinutes = 30;
         
         const selectedSub = subtopics.find(s => (s.subtopic_id || s.id) === selectedSubtopicId);
@@ -542,12 +560,11 @@ export default function ExamPortal({ theme = 'dark' }) {
             });
           }
         } else {
-          // Robust Topic Drill Query: match by subtopic_id or subtopic name
           const selectedSubObj = subtopics.find(s => String(s.subtopic_id || s.id) === String(selectedSubtopicId));
           const subNameClean = (selectedSubObj?.subtopic_name || selectedSubObj?.name || '').trim();
 
           let qData = [];
-          const { data: qById, error: err1 } = await supabase
+          const { data: qById } = await supabase
             .from('questions')
             .select('*, passages(*)')
             .eq('subtopic_id', selectedSubtopicId);
@@ -574,13 +591,15 @@ export default function ExamPortal({ theme = 'dark' }) {
         }
 
         const qIdKey = loadedQuestions[0].question_id !== undefined ? 'question_id' : 'id';
+        const topicQIds = loadedQuestions.map(q => q[qIdKey]);
+        const { data: topicOptions } = await supabase
+          .from('question_options')
+          .select('*')
+          .in('question_id', topicQIds);
 
         const finalQuestions = loadedQuestions.map(q => {
           const qId = q[qIdKey];
-          const rawOpts = q.question_options || (allOptions || []).filter(o => {
-            const optQId = String(o.question_id || o.qid || o.questionId || o.q_id || '').trim();
-            return optQId === String(qId).trim() || optQId === String(q.id).trim();
-          });
+          const rawOpts = q.question_options || (topicOptions || []).filter(o => String(o.question_id || o.qid || '').trim() === String(qId).trim());
 
           return {
             ...q,
@@ -758,7 +777,7 @@ export default function ExamPortal({ theme = 'dark' }) {
 
         if (selectedOptId) {
           attempted += 1;
-          if (correctOpt && (correctOpt.option_id === selectedOptId || correctOpt.id === selectedOptId)) {
+          if (correctOpt && (correctOpt.option_id === selectedOptId || correctOpt.id === selectedOptId || correctOpt.option_text === selectedOptId)) {
             score += 1;
             correctCount += 1;
           } else {
@@ -1384,34 +1403,58 @@ export default function ExamPortal({ theme = 'dark' }) {
                     </div>
 
                     <div className="space-y-3 pt-2">
-                      {currentQ?.question_options?.slice(0, examOptionsLimit).map((opt, oIndex) => {
-                        const optId = opt.option_id || opt.id;
-                        const isChecked = userAnswers[currentQ.question_id] === optId;
-                        return (
-                          <div
-                            key={optId}
-                            onClick={() => handleOptionSelect(optId)}
-                            className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
-                              isChecked
-                                ? (isDark 
-                                    ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-white shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]' 
-                                    : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-50 border-red-600 text-slate-900 shadow-sm ring-1 ring-red-600')
-                                : (isDark 
-                                    ? 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-white' 
-                                    : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 shadow-xs')
-                            }`}
-                          >
-                            <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
-                              isChecked 
-                                ? (isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : isMono ? 'bg-white text-black border-2 border-black' : 'bg-red-600 text-white border-red-600') 
-                                : (isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/20 text-white' : isMono ? 'bg-neutral-100 border-2 border-black text-black' : 'bg-slate-100 border-slate-300 text-slate-800')
-                            }`}>
-                              {String.fromCharCode(65 + oIndex)}
-                            </span>
-                            <span className="text-sm font-medium font-sans"><MathText text={opt.option_text} /></span>
-                          </div>
-                        );
-                      })}
+                      {(() => {
+                        let rawOpts = currentQ?.question_options || currentQ?.options || currentQ?.choices;
+                        if (typeof rawOpts === 'string') {
+                          try { rawOpts = JSON.parse(rawOpts); } catch (e) { rawOpts = []; }
+                        }
+                        if (!Array.isArray(rawOpts) || rawOpts.length === 0) {
+                          rawOpts = [
+                            currentQ?.option_1 || currentQ?.option_a,
+                            currentQ?.option_2 || currentQ?.option_b,
+                            currentQ?.option_3 || currentQ?.option_c,
+                            currentQ?.option_4 || currentQ?.option_d,
+                            currentQ?.option_5 || currentQ?.option_e
+                          ].filter(Boolean).map((txt, idx) => ({ id: `inline_opt_${idx}`, option_text: txt }));
+                        }
+
+                        const displayOpts = (rawOpts || []).slice(0, examOptionsLimit);
+
+                        if (displayOpts.length === 0) {
+                          return <div className="text-xs font-mono text-amber-400 p-3 bg-amber-500/10 rounded-xl">⚠️ No options found for this question.</div>;
+                        }
+
+                        return displayOpts.map((opt, oIndex) => {
+                          const optId = opt.option_id || opt.id || `opt_${oIndex}`;
+                          const optText = opt.option_text || opt.text || opt;
+                          const isChecked = userAnswers[currentQ.question_id] === optId || userAnswers[currentQ.question_id] === optText;
+
+                          return (
+                            <div
+                              key={optId}
+                              onClick={() => handleOptionSelect(optId || optText)}
+                              className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
+                                isChecked
+                                  ? (isDark 
+                                      ? 'bg-[oklch(0.94_0.21_118)]/10 border-[oklch(0.94_0.21_118)] text-white shadow-[0_0_20px_rgba(204,255,0,0.15)] ring-1 ring-[oklch(0.94_0.21_118)]' 
+                                      : isMono ? 'bg-black text-white border-2 border-black' : 'bg-red-50 border-red-600 text-slate-900 shadow-sm ring-1 ring-red-600')
+                                  : (isDark 
+                                      ? 'bg-[oklch(0.23_0.045_265)]/50 border-white/10 text-[oklch(0.68_0.04_265)] hover:border-white/30 hover:text-white' 
+                                      : isMono ? 'bg-white border-2 border-black text-black hover:bg-neutral-100' : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 shadow-xs')
+                              }`}
+                            >
+                              <span className={`w-7 h-7 shrink-0 flex items-center justify-center rounded-xl font-mono text-xs font-bold border ${
+                                isChecked 
+                                  ? (isDark ? 'bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] border-[oklch(0.94_0.21_118)]' : isMono ? 'bg-white text-black border-2 border-black' : 'bg-red-600 text-white border-red-600') 
+                                  : (isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/20 text-white' : isMono ? 'bg-neutral-100 border-2 border-black text-black' : 'bg-slate-100 border-slate-300 text-slate-800')
+                              }`}>
+                                {String.fromCharCode(65 + oIndex)}
+                              </span>
+                              <span className="text-sm font-medium font-sans"><MathText text={optText} /></span>
+                            </div>
+                          );
+                        });
+                      })()}
                     </div>
                   </>
                 )}
@@ -1561,7 +1604,7 @@ export default function ExamPortal({ theme = 'dark' }) {
       qList.forEach((q) => {
         const studentAns = userAnswers[q.question_id];
         const correctOpt = q.question_options?.find((o) => o.is_correct);
-        const correctOptId = correctOpt?.option_id || correctOpt?.id;
+        const correctOptId = correctOpt?.option_id || correctOpt?.id || correctOpt?.option_text;
         totalTime += questionTimers[q.question_id] || 0;
 
         if (!studentAns) {
@@ -1729,7 +1772,7 @@ export default function ExamPortal({ theme = 'dark' }) {
             {allQs.map((q, idx) => {
               const studentAnswerId = userAnswers[q.question_id];
               const correctOption = q.question_options?.find((o) => o.is_correct);
-              const correctOptId = correctOption?.option_id || correctOption?.id;
+              const correctOptId = correctOption?.option_id || correctOption?.id || correctOption?.option_text;
               const isCorrect = studentAnswerId === correctOptId;
               const timeSpentSecs = questionTimers[q.question_id] || 0;
 
@@ -1759,8 +1802,9 @@ export default function ExamPortal({ theme = 'dark' }) {
 
                   <div className="space-y-2 font-mono text-xs">
                     {q.question_options?.slice(0, examOptionsLimit).map((opt, oIndex) => {
-                      const optId = opt.option_id || opt.id;
-                      const isStudentChoice = studentAnswerId === optId;
+                      const optId = opt.option_id || opt.id || `opt_${oIndex}`;
+                      const optText = opt.option_text || opt.text || opt;
+                      const isStudentChoice = studentAnswerId === optId || studentAnswerId === optText;
                       const isRightChoice = opt.is_correct;
 
                       let badgeStyle = isDark ? 'bg-[oklch(0.16_0.03_265)] border-white/5 opacity-70' : isMono ? 'bg-white border-2 border-black text-black' : 'bg-slate-50 border-slate-200 text-slate-600';
@@ -1769,7 +1813,7 @@ export default function ExamPortal({ theme = 'dark' }) {
 
                       return (
                         <div key={optId} className={`p-4 rounded-2xl border flex items-center justify-between ${badgeStyle}`}>
-                          <span>({String.fromCharCode(65 + oIndex)}) <MathText text={opt.option_text} /></span>
+                          <span>({String.fromCharCode(65 + oIndex)}) <MathText text={optText} /></span>
                           <span className="font-bold tracking-wider">
                             {isStudentChoice && '[YOUR PICK] '}
                             {isRightChoice && '[CORRECT]'}

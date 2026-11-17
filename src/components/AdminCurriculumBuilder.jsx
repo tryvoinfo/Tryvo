@@ -8,7 +8,7 @@ const cleanText = (text) => {
     .replace(/â€”/g, '—')
     .replace(/â€™/g, "'")
     .replace(/â€œ/g, '"')
-    .replace(/â€/g, '"');
+    .replace(/â€ /g, '"');
 };
 
 export default function AdminCurriculumBuilder() {
@@ -266,17 +266,21 @@ export default function AdminCurriculumBuilder() {
         duration_minutes: Number(editDuration)
       }).eq('exam_id', examId);
 
-      for (const sec of editSections) {
-        const secId = sec.section_id || sec.id;
-        const qCount = Number(sec.no_of_questions) || 20;
-        await supabase.from('exam_sections').update({
-          section_name: sec.section_name,
-          no_of_questions: qCount,
-          maximum_marks: qCount,
-          duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20),
-          section_duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20)
-        }).eq('section_id', secId);
-      }
+      // Delete old sections and re-insert to handle added/removed categories cleanly[cite: 15]
+      await supabase.from('exam_sections').delete().eq('exam_id', examId);
+
+      const sectionsToInsert = editSections.map(sec => ({
+        exam_id: examId,
+        section_id: sec.section_id || `SEC_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        section_name: sec.section_name,
+        no_of_questions: Number(sec.no_of_questions) || 20,
+        maximum_marks: Number(sec.no_of_questions) || 20,
+        duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20),
+        section_duration_minutes: Number(sec.duration_minutes || sec.section_duration_minutes || 20)
+      }));
+
+      const { error: secInsertErr } = await supabase.from('exam_sections').insert(sectionsToInsert);
+      if (secInsertErr) throw secInsertErr;
 
       alert(`Updated blueprint for "${editExamName}"!`);
       setEditingExam(null);
@@ -652,11 +656,31 @@ export default function AdminCurriculumBuilder() {
               </div>
 
               <div className="space-y-3 pt-2 border-t border-white/10">
-                <span className="font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider block">Attached Sections / Categories</span>
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-[oklch(0.94_0.21_118)] uppercase tracking-wider">Attached Sections / Categories</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditSections([
+                        ...editSections,
+                        {
+                          section_id: `SEC_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                          section_name: '',
+                          no_of_questions: 20,
+                          duration_minutes: 20
+                        }
+                      ]);
+                    }}
+                    className="px-3 py-1.5 rounded-xl font-bold uppercase text-xs border bg-[oklch(0.94_0.21_118)] text-[oklch(0.16_0.03_265)] hover:brightness-110 transition cursor-pointer"
+                  >
+                    + Add Category
+                  </button>
+                </div>
+
                 {editSections.map((sec, idx) => (
                   <div key={idx} className="bg-[oklch(0.16_0.03_265)] p-4 rounded-2xl border border-white/5 space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
+                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
+                      <div className="sm:col-span-6">
                         <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">Category / Section Name</label>
                         <input
                           type="text"
@@ -669,7 +693,7 @@ export default function AdminCurriculumBuilder() {
                           className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
                         />
                       </div>
-                      <div>
+                      <div className="sm:col-span-4">
                         <label className="block text-[10px] text-[oklch(0.68_0.04_265)] mb-1 uppercase">No. of Questions</label>
                         <input
                           type="number"
@@ -682,6 +706,21 @@ export default function AdminCurriculumBuilder() {
                           }}
                           className="w-full bg-[oklch(0.23_0.045_265)] border border-white/10 rounded-xl p-2.5 text-xs text-white"
                         />
+                      </div>
+                      <div className="sm:col-span-2 text-right pt-4">
+                        {editSections.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = editSections.filter((_, i) => i !== idx);
+                              setEditSections(updated);
+                            }}
+                            className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 transition cursor-pointer"
+                            title="Remove Category"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
