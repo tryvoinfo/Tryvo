@@ -42,6 +42,7 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
   const [stats, setStats] = useState({
     totalTests: 0,
     avgScore: 0,
+    avgNum: 0,
     highestScore: 0,
     submissions: []
   });
@@ -54,31 +55,43 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
     if (!user) return;
     try {
       setLoading(true);
-      const { data, error } = await supabase
+
+      const { data: allRows, error } = await supabase
         .from('exam_submissions')
         .select('*')
-        .eq('user_id', user.id)
         .order('created_at', { ascending: true });
 
       if (error) throw error;
 
-      if (data && data.length > 0) {
-        const totalTests = data.length;
-        const scores = data.map(sub => (sub.total_marks > 0 ? (sub.score / sub.total_marks) * 100 : 0));
-        const avgScore = (scores.reduce((a, b) => a + b, 0) / totalTests).toFixed(1);
-        const highestScore = Math.max(...scores).toFixed(1);
+      const emailLower = (user.email || '').trim().toLowerCase();
+      const idStr = String(user.id || '').trim();
+
+      const matched = (allRows || []).filter((sub) => {
+        const subEmail = String(sub.user_email || '').trim().toLowerCase();
+        const subUserId = String(sub.user_id || '').trim();
+        return (emailLower && subEmail === emailLower) || (idStr && subUserId === idStr);
+      });
+
+      if (matched.length > 0) {
+        const totalTests = matched.length;
+        const scores = matched.map((sub) =>
+          sub.total_marks > 0 ? (Number(sub.score) / Number(sub.total_marks)) * 100 : 0
+        );
+        const avgNum = Number((scores.reduce((a, b) => a + b, 0) / totalTests).toFixed(1));
+        const highestScore = Number(Math.max(...scores).toFixed(1));
 
         setStats({
           totalTests,
-          avgScore,
+          avgScore: avgNum,
+          avgNum,
           highestScore,
-          submissions: data
+          submissions: matched
         });
       } else {
-        setStats({ totalTests: 0, avgScore: 0, highestScore: 0, submissions: [] });
+        setStats({ totalTests: 0, avgScore: 0, avgNum: 0, highestScore: 0, submissions: [] });
       }
     } catch (err) {
-      console.error("Error fetching user analytics:", err);
+      console.error('Error fetching user analytics:', err);
     } finally {
       setLoading(false);
     }
@@ -103,18 +116,18 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
   }
 
   const getPositives = (avg) => {
-    if (avg >= 75) return "Exceptional consistency! Strong command over core syllabus concepts and time management.";
-    if (avg >= 50) return "Good foundational understanding. Regular test practice is building steady momentum.";
-    return "Showing great dedication by attempting tests consistently. Room for foundational growth.";
+    if (avg >= 75) return 'Exceptional consistency! Strong command over core syllabus concepts and time management.';
+    if (avg >= 50) return 'Good foundational understanding. Regular test practice is building steady momentum.';
+    return 'Showing great dedication by attempting tests consistently. Room for foundational growth.';
   };
 
   const getImprovements = (avg) => {
-    if (avg >= 75) return "Focus on speed optimization during high-pressure timed sprints.";
-    if (avg >= 50) return "Work on accuracy in tricky reasoning sections and review skipped questions.";
-    return "Focus heavily on core concepts, topic drills, and analyzing incorrect answers post-test.";
+    if (avg >= 75) return 'Focus on speed optimization during high-pressure timed sprints.';
+    if (avg >= 50) return 'Work on accuracy in tricky reasoning sections and review skipped questions.';
+    return 'Focus heavily on core concepts, topic drills, and analyzing incorrect answers post-test.';
   };
 
-  const insight = getInsightTone(stats.avgScore);
+  const insight = getInsightTone(stats.avgNum);
 
   return (
     <div className={`flex-1 p-6 sm:p-10 space-y-10 max-w-7xl mx-auto w-full font-sans transition-colors duration-200 ${t.bg}`}>
@@ -126,7 +139,7 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
             PERFORMANCE ANALYTICS
           </h1>
           <p className="text-sm opacity-75 font-medium">
-            STUDENT PROGRESS OVERVIEW — <span className='font-mono'>{user?.email}</span>
+            STUDENT PROGRESS OVERVIEW — <span className="font-mono">{user?.email}</span>
           </p>
         </div>
         <button
@@ -166,7 +179,7 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
             <span>{insight.icon}</span> KEY STRENGTHS
           </div>
           <p className="leading-relaxed text-base opacity-90">
-            {stats.totalTests > 0 ? getPositives(stats.avgScore) : "Complete your first mock test to unlock personalized behavioral feedback."}
+            {stats.totalTests > 0 ? getPositives(stats.avgNum) : 'Complete your first mock test to unlock personalized behavioral feedback.'}
           </p>
         </div>
 
@@ -175,7 +188,7 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
             <span>🧐</span> RECOMMENDATIONS
           </div>
           <p className="leading-relaxed text-base opacity-90">
-            {stats.totalTests > 0 ? getImprovements(stats.avgScore) : "Take practice tests regularly to identify weak subject areas and bottlenecks."}
+            {stats.totalTests > 0 ? getImprovements(stats.avgNum) : 'Take practice tests regularly to identify weak subject areas and bottlenecks.'}
           </p>
         </div>
       </div>
@@ -193,7 +206,7 @@ export default function UserAnalytics({ user, theme = 'dark' }) {
         ) : (
           <div className="space-y-5">
             {stats.submissions.slice(-5).reverse().map((sub, idx) => {
-              const pct = sub.total_marks > 0 ? ((sub.score / sub.total_marks) * 100).toFixed(0) : 0;
+              const pct = sub.total_marks > 0 ? ((Number(sub.score) / Number(sub.total_marks)) * 100).toFixed(0) : 0;
               return (
                 <div key={idx} className={`p-5 rounded-2xl border space-y-2 ${t.cardInner}`}>
                   <div className="flex justify-between items-baseline gap-4">

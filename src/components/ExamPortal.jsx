@@ -804,26 +804,38 @@ export default function ExamPortal({ theme = 'dark' }) {
       const { data: { session } } = await supabase.auth.getSession();
       const userSessionStr = localStorage.getItem('tryvo_user_session');
       const parsedUser = userSessionStr ? JSON.parse(userSessionStr) : null;
-      const userId = session?.user?.id || parsedUser?.id;
+      const userId = session?.user?.id || parsedUser?.id || null;
+      const userEmail = session?.user?.email || parsedUser?.email || null;
 
-      if (userId) {
+      if (userId || userEmail) {
         const activeExamObj = exams.find((e) => (e.exam_id || e.id) === selectedExamId);
-        const examTitleName = testMode === 'Full-Length Mock' 
-          ? (activeExamObj?.exam_name || activeExamObj?.name || 'Full Mock Exam') 
+        const examTitleName = testMode === 'Full-Length Mock'
+          ? (activeExamObj?.exam_name || activeExamObj?.name || 'Full Mock Exam')
           : `${testMode} Session`;
 
-        await supabase.from('exam_submissions').insert([
-          {
-            user_id: userId,
-            exam_title: examTitleName,
-            score: Number(score.toFixed(2)),
-            total_marks: totalQCount,
-            category: testMode
-          }
-        ]);
+        const payloadWithEmail = {
+          user_id: userId,
+          user_email: userEmail,
+          exam_title: examTitleName,
+          score: Number(score.toFixed(2)),
+          total_marks: totalQCount,
+          category: testMode
+        };
+
+        let { error: subErr } = await supabase.from('exam_submissions').insert([payloadWithEmail]);
+
+        if (subErr && String(subErr.message || '').includes('user_email')) {
+          const { user_email, ...payloadWithoutEmail } = payloadWithEmail;
+          const retry = await supabase.from('exam_submissions').insert([payloadWithoutEmail]);
+          subErr = retry.error;
+        }
+
+        if (subErr) {
+          console.error('Failed to insert exam submission:', subErr);
+        }
       }
     } catch (err) {
-      console.error("Error recording exam submission to analytics:", err);
+      console.error('Error recording exam submission to analytics:', err);
     }
   };
 
